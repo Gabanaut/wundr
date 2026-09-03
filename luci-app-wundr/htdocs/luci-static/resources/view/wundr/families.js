@@ -167,8 +167,10 @@ return view.extend({
 		}
 
 		function openEditor(existing) {
-			var sid = existing ? existing['.name'] : uci.add('wundr', 'family');
-			var p = existing || { '.name': sid, mode: 'unlimited', devices: [] };
+			/* For a new profile we must NOT uci.add() here — cancelling the
+			 * dialog would leave a phantom staged section. sid fills in on save. */
+			var sid = existing ? existing['.name'] : null;
+			var p = existing || { mode: 'unlimited', devices: [] };
 			var name = wb.input({ 'value': p.name || '', 'placeholder': _('e.g. Kids / Bedroom'), 'maxlength': '32' });
 			var mode = wb.select([ [ 'unlimited', _('Always allowed') ], [ 'schedule', _('Bedtime window (firewall schedule)') ] ], p.mode || 'unlimited');
 			var start = wb.input({ 'type': 'time', 'value': p.bedtime_start || '21:00' });
@@ -210,6 +212,11 @@ return view.extend({
 					if (macs.indexOf(ex) < 0) macs.push(ex);
 				}
 				var modeVal = mode.value; /* disabled selects still expose .value */
+				if (modeVal === 'schedule' && (!/^\d{1,2}:\d{2}$/.test(start.value) || !/^\d{1,2}:\d{2}$/.test(end.value)))
+					throw new Error(_('Enter both times as HH:MM.'));
+				/* section created only once every validation passes — a
+				 * cancelled dialog must not stage a phantom profile */
+				if (sid == null) sid = uci.add('wundr', 'family');
 				uci.set('wundr', sid, 'name', name.value.trim());
 				uci.set('wundr', sid, 'mode', modeVal);
 				if (macs.length) uci.set('wundr', sid, 'devices', macs); else uci.unset('wundr', sid, 'devices');
