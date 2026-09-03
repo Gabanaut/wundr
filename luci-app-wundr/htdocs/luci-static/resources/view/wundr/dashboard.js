@@ -105,7 +105,7 @@ return view.extend({
 		var tiles = E('div', { 'class': 'wb-tiles' }, [
 			tile('wifi', _('Wi-Fi'), _('Networks, radios, QR'), 'wundr/network/wifi'),
 			tile('devices', _('Devices'), _('Who is connected'), 'wundr/network/devices'),
-			tile('families', _('Families'), _('Pause & bedtime'), 'wundr/protection/families'),
+			tile('families', _('Family'), _('Pause & bedtime'), 'wundr/protection/families'),
 			tile('shield', _('Security'), _('Posture & port rules'), 'wundr/protection/security'),
 			tile('map', _('Network Map'), _('Segments & policy'), 'wundr/network/map'),
 			tile('qos', _('QoS'), _('Smooth latency'), 'wundr/network/qos'),

@@ -61,7 +61,7 @@
 		"action": { "type": "view", "path": "wundr/shield" }
 	},
 	"wundr/protection/families": {
-		"title": "Families",
+		"title": "Family",
 		"order": 20,
 		"action": { "type": "view", "path": "wundr/families" }
 	},

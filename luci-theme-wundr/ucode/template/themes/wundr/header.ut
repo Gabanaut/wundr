@@ -96,7 +96,7 @@
             {% if (dispatcher.lookup('admin/network/firewall')): %}
             <li><a href="{{ dispatcher.build_url('admin/network/firewall') }}" data-nav="admin/network/firewall"><span>{{ _('Firewall (Advanced)') }}</span></a></li>
             {% endif %}
-            <li><a href="{{ dispatcher.build_url('wundr/protection/families') }}" data-nav="wundr/protection/families"><span>{{ _('Families') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/protection/families') }}" data-nav="wundr/protection/families"><span>{{ _('Family') }}</span></a></li>
           </ul>
         </li>
 

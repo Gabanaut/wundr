@@ -10,17 +10,20 @@
 'require tools.widgets as widgets';
 'require wundr.ui as wb';
 
-/* Wundr Families — parental controls that work on stock OpenWrt.
+/* Wundr Family — parental controls that work on stock OpenWrt.
  *
- * A profile groups device MACs. Enforcement is derived firewall state, written
- * through LuCI's own UCI + apply path (validated, atomic, rollback-capable):
+ * Each member of the household gets a member profile that groups their
+ * devices (a person typically owns several). Enforcement is derived firewall
+ * state, written through LuCI's own UCI + apply path (validated, atomic,
+ * rollback-capable):
  *   • Pause    → rule `wundr_pause_<id>`   (lan→wan REJECT for those MACs).
  *   • Bedtime  → rule `wundr_bedtime_<id>`  same, PLUS fw4 time options
  *                (weekdays / start_time / stop_time) so the window is enforced
  *                by the router itself, even with this page closed.
- * Profiles live in /etc/config/wundr as `family` sections. Wundr owns only the
- * `wundr_*` rules; it rebuilds them from the profiles on every save so an edit
- * can never strand a stale rule. Nothing is written outside LuCI's own path. */
+ * Member profiles live in /etc/config/wundr as `family` sections. Wundr owns
+ * only the `wundr_*` rules and rebuilds them from the profiles on every save,
+ * so an edit can never strand a stale rule. Nothing is written outside
+ * LuCI's own path. */
 
 var callHints = rpc.declare({ object: 'luci-rpc', method: 'getHostHints', expect: { '': {} } });
 var callLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases', expect: { '': {} } });
@@ -45,7 +48,7 @@ function inBedtimeWindow(p) {
 	return s <= e ? (m >= s && m < e) : (m >= s || m < e);
 }
 
-/* Rebuild every Wundr-managed rule from the profiles (idempotent). */
+/* Rebuild every Wundr-managed rule from the member profiles (idempotent). */
 function syncFirewall() {
 	uci.sections('firewall', 'rule', function(r) {
 		if (/^wundr_(pause|bedtime)_/.test(String(r.name || ''))) uci.remove('firewall', r['.name']);
@@ -106,7 +109,7 @@ return view.extend({
 
 		var body = E('div');
 
-		function profileCard(p) {
+		function memberCard(p) {
 			var macs = macsOf(p), paused = p.state_paused === '1';
 			return E('div', { 'class': 'wb-card' }, [
 				E('div', { 'class': 'wb-person-top' }, [
@@ -118,11 +121,11 @@ return view.extend({
 				]),
 				E('div', { 'class': 'wb-device-chips', 'style': 'margin:8px 0 4px' }, macs.length ? macs.map(function(m) {
 					return E('span', { 'class': 'wb-device-chip', 'title': m }, [ friendly(m) || m ]);
-				}) : [ E('span', { 'class': 'wb-sub' }, [ _('No devices assigned yet') ]) ]),
+				}) : [ E('span', { 'class': 'wb-sub' }, [ _('No devices in this profile yet') ]) ]),
 				E('div', { 'style': 'display:flex;gap:8px;flex-wrap:wrap' }, [
 					E('button', { 'class': 'wb-btn sm' + (paused ? ' primary' : ''), 'click': function() { togglePause(p); } }, [ wb.iconLabel(paused ? 'play' : 'pause', paused ? _('Resume') : _('Pause internet')) ]),
 					E('button', { 'class': 'wb-btn sm', 'click': function() { openEditor(p); } }, [ wb.iconLabel('edit', _('Edit')) ]),
-					E('button', { 'class': 'wb-btn sm danger', 'click': function() { removeProfile(p); } }, [ wb.iconLabel('trash', _('Delete')) ])
+					E('button', { 'class': 'wb-btn sm danger', 'click': function() { removeMember(p); } }, [ wb.iconLabel('trash', _('Delete')) ])
 				])
 			]);
 		}
@@ -132,14 +135,14 @@ return view.extend({
 			var paused = list.filter(function(p) { return p.state_paused === '1'; }).length;
 			var inBed = list.filter(inBedtimeWindow).length;
 			dom.content(body, [
-				wb.hero(_('Families'), _('Group devices into people, then pause them instantly or set a bedtime the firewall enforces itself.'), [
-					wb.stat(String(list.length), _('Profiles')),
+				wb.hero(_('Family'), _('One profile per person groups all of their devices — pause them instantly or set a bedtime the firewall enforces itself.'), [
+					wb.stat(String(list.length), _('Members')),
 					wb.stat(String(paused), _('Paused now')),
 					wb.stat(String(inBed), _('In bedtime'))
-				], [ E('button', { 'class': 'wb-btn primary', 'click': function() { openEditor(null); } }, [ wb.iconLabel('plus', _('New profile')) ]) ]),
-				list.length ? E('div', { 'class': 'wb-grid' }, list.map(profileCard))
-					: wb.empty(_('No profiles yet. Create one, assign devices, then pause or schedule their internet in one tap.'), 'families',
-						E('button', { 'class': 'wb-btn primary', 'click': function() { openEditor(null); } }, [ wb.iconLabel('plus', _('Create first profile')) ]))
+				], [ E('button', { 'class': 'wb-btn primary', 'click': function() { openEditor(null); } }, [ wb.iconLabel('plus', _('Add member')) ]) ]),
+				list.length ? E('div', { 'class': 'wb-grid' }, list.map(memberCard))
+					: wb.empty(_('No members yet. Add one, tick their devices, then pause or schedule their internet in one tap.'), 'families',
+						E('button', { 'class': 'wb-btn primary', 'click': function() { openEditor(null); } }, [ wb.iconLabel('plus', _('Add your first member')) ]))
 			]);
 		}
 
@@ -157,21 +160,21 @@ return view.extend({
 				});
 		}
 
-		function removeProfile(p) {
-			wb.confirm(_('Delete “%s”?').format(p.name || p['.name']), _('Any pause or bedtime firewall rule for this profile is removed too.')).then(function(yes) {
+		function removeMember(p) {
+			wb.confirm(_('Remove “%s”?').format(p.name || p['.name']), _('This member profile and its pause or bedtime firewall rule are removed. Their devices keep normal internet access.')).then(function(yes) {
 				if (!yes) return;
 				uci.remove('wundr', p['.name']);
 				syncFirewall();
-				return wb.apply(false, _('Profile deleted'), p.name || '').then(reloadUci).then(rerender);
+				return wb.apply(false, _('Member removed'), p.name || '').then(reloadUci).then(rerender);
 			});
 		}
 
 		function openEditor(existing) {
-			/* For a new profile we must NOT uci.add() here — cancelling the
+			/* For a new member we must NOT uci.add() here — cancelling the
 			 * dialog would leave a phantom staged section. sid fills in on save. */
 			var sid = existing ? existing['.name'] : null;
-			var p = existing || { mode: 'unlimited', devices: [] };
-			var name = wb.input({ 'value': p.name || '', 'placeholder': _('e.g. Kids / Bedroom'), 'maxlength': '32' });
+			var p = existing || { '.name': null, mode: 'unlimited', devices: [] };
+			var name = wb.input({ 'value': p.name || '', 'placeholder': _('e.g. Ava / Kids / Bedroom'), 'maxlength': '32' });
 			var mode = wb.select([ [ 'unlimited', _('Always allowed') ], [ 'schedule', _('Bedtime window (firewall schedule)') ] ], p.mode || 'unlimited');
 			var start = wb.input({ 'type': 'time', 'value': p.bedtime_start || '21:00' });
 			var end = wb.input({ 'type': 'time', 'value': p.bedtime_end || '07:00' });
@@ -194,16 +197,16 @@ return view.extend({
 			}
 			mode.addEventListener('change', syncBlocks); syncBlocks();
 
-			wb.formModal(existing ? _('Edit profile') : _('New profile'), [
+			wb.formModal(existing ? _('Edit member') : _('New member'), [
 				{ label: _('Name'), node: name },
 				{ label: _('Control'), node: mode, help: _('Bedtime becomes a real firewall time rule enforced by the router.') },
 				{ label: _('From'), node: start },
 				{ label: _('To'), node: end },
 				{ label: _('Days'), node: E('div', { 'style': 'display:flex;flex-wrap:wrap;max-width:420px' }, dayBoxes) },
-				{ label: _('Devices'), node: deviceList, desc: _('Tick every device that belongs to this person or group.') },
+				{ label: _('Devices'), node: deviceList, desc: _('Tick every device that belongs to this member — phones, laptops, consoles.') },
 				{ label: _('Extra MAC'), node: extra }
 			], function() {
-				if (!name.value.trim()) throw new Error(_('Please give the profile a name.'));
+				if (!name.value.trim()) throw new Error(_('Please give the member a name.'));
 				var macs = Array.prototype.map.call(deviceList.querySelectorAll('input:checked'), function(cb) { return cb.value; });
 				var ex = (extra.value || '').trim().toUpperCase();
 				if (ex) {
@@ -212,10 +215,6 @@ return view.extend({
 					if (macs.indexOf(ex) < 0) macs.push(ex);
 				}
 				var modeVal = mode.value; /* disabled selects still expose .value */
-				if (modeVal === 'schedule' && (!/^\d{1,2}:\d{2}$/.test(start.value) || !/^\d{1,2}:\d{2}$/.test(end.value)))
-					throw new Error(_('Enter both times as HH:MM.'));
-				/* section created only once every validation passes — a
-				 * cancelled dialog must not stage a phantom profile */
 				if (sid == null) sid = uci.add('wundr', 'family');
 				uci.set('wundr', sid, 'name', name.value.trim());
 				uci.set('wundr', sid, 'mode', modeVal);
@@ -231,8 +230,8 @@ return view.extend({
 				}
 				p.name = name.value.trim(); /* keep status pill honest before rerender */
 				syncFirewall();
-				return wb.apply(false, existing ? _('Profile updated') : _('Profile created'), name.value.trim()).then(reloadUci).then(rerender);
-			}, { intro: existing ? null : _('A profile groups devices so you can pause or schedule them together.'), ok: existing ? _('Save') : _('Create') });
+				return wb.apply(false, existing ? _('Member updated') : _('Member added'), name.value.trim()).then(reloadUci).then(rerender);
+			}, { intro: existing ? null : _('A member profile groups one person\'s devices — however many they own — so you can pause or schedule them together.'), ok: existing ? _('Save') : _('Add') });
 		}
 
 		rerender();
