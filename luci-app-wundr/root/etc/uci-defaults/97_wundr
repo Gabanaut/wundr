@@ -1,0 +1,19 @@
+#!/bin/sh
+# uci-defaults: ensure Wundr state exists and (only on a virgin install,
+# when LuCI is still on bootstrap) activate the Wundr theme. Runs once at
+# first boot; opkg's own postinst in luci-theme-wundr handles package installs.
+
+# make sure the enabling section exists for menu.d's uci dependency
+uci -q get wundr.global >/dev/null || {
+	uci set wundr.global=global
+	uci set wundr.global.enabled='1'
+}
+uci commit wundr
+
+# activate the theme only if the user has not chosen one yet
+if [ "$(uci -q get luci.main.mediaurlbase)" = "/luci-static/bootstrap" ] || [ -z "$(uci -q get luci.main.mediaurlbase)" ]; then
+	uci set luci.main.mediaurlbase=/luci-static/wundr
+	uci commit luci
+fi
+
+exit 0

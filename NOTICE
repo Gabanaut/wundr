@@ -1,0 +1,27 @@
+Wundr — LuCI theme & app for OpenWrt
+Copyright 2026 Wundr contributors
+
+This product includes software developed by the Wundr contributors
+(https://github.com/wundr-router/wundr).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+## Commercial use & attribution requirement
+
+Commercial use, modification, and redistribution are permitted under the
+Apache-2.0 License. Vendors and derivative works MUST retain:
+
+1. The LICENSE file (Apache-2.0 full text),
+2. This NOTICE file with its copyright and attribution lines,
+3. The "Powered by Wundr" footer link in the theme footer template
+   (luci-theme-wundr/ucode/template/themes/wundr/footer.ut), either as-is or
+   pointing to the vendor's own project page that credits Wundr.
+
+If you modify the source and distribute it (as required when offering the
+software over a network is not mandated by Apache-2.0, but distributing
+binaries is), you must clearly mark your changes and must not present the
+work as unmodified Wundr.

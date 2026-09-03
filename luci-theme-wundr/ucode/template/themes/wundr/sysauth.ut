@@ -1,0 +1,132 @@
+{# Wundr theme — login page (standalone; rendered by the dispatcher as themes/wundr/sysauth) #}
+{%
+	const boardinfo = ubus.call('system', 'board') ?? {};
+
+	let https_ports = uci.get('uhttpd', 'main', 'listen_https') ?? [];
+	https_ports = uniq(filter(
+		map(
+			(type(https_ports) == 'string') ? split(https_ports, /\s+/) : https_ports,
+			e => +match(e, /\d+$/)?.[0]
+		),
+		p => (p >= 0 && p <= 65535)
+	));
+
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}">
+<head>
+  <meta charset="utf-8">
+  <title>{{ striptags(boardinfo.hostname ?? 'OpenWrt') }} · {{ _('Sign in') }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="darkreader-lock">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="{{ media }}/brand-mark.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('wb-theme');
+        if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ media }}/cascade.css?v=0.2.0">
+  <link rel="stylesheet" href="{{ media }}/app.css?v=0.2.0">
+</head>
+<body class="lang_{{ dispatcher.lang }} wundr wb-login-body">
+  <div class="wb-login-bg" aria-hidden="true"><span></span><span></span><span></span></div>
+  <main class="wb-login">
+    <form method="post" class="wb-login-card" autocomplete="on">
+      <div class="wb-login-brand">
+        <svg class="wb-logo wb-logo-large" viewBox="0 0 40 44" aria-hidden="true"><path class="wb-logo-wave" d="M6 12a19 19 0 0 1 28 0"/><path class="wb-logo-wave wb-logo-wave-2" d="M11 18a12 12 0 0 1 18 0"/><path class="wb-logo-frame" d="M16 24a5.5 5.5 0 0 1 8 0"/><path class="wb-logo-path" d="M9 26l4 11 7-14 7 14 4-11"/></svg>
+        <div>
+          <h1>{{ striptags(boardinfo.hostname ?? 'OpenWrt') }}</h1>
+          <p>{{ _('Sign in to manage your network') }}</p>
+        </div>
+      </div>
+
+      {% if (fuser): %}
+      <div class="alert-message error" role="alert">
+        <p>{{ _('Invalid username and/or password! Please try again.') }}</p>
+      </div>
+      {% endif %}
+
+      {% if (auth_message && !fuser): %}
+      <div class="alert-message" role="status">
+        <p>{{ auth_message }}</p>
+      </div>
+      {% endif %}
+
+      <label class="wb-login-field">
+        <span>{{ _('Username') }}</span>
+        <input type="text" name="luci_username" value="{{ entityencode(duser, true) }}" autocomplete="username" autocapitalize="none" spellcheck="false">
+      </label>
+      <label class="wb-login-field">
+        <span>{{ _('Password') }}</span>
+        <input type="password" name="luci_password" autocomplete="current-password">
+      </label>
+
+      {% if (auth_fields): %}
+        {% for (let field in auth_fields): %}
+        <label class="wb-login-field">
+          <span>{{ _(field.label ?? field.name) }}</span>
+          <input
+            type="{{ field.type ?? 'text' }}"
+            name="{{ field.name }}"
+            {% if (field.placeholder): %}placeholder="{{ field.placeholder }}"{% endif %}
+            {% if (field.inputmode): %}inputmode="{{ field.inputmode }}"{% endif %}
+            {% if (field.pattern): %}pattern="{{ field.pattern }}"{% endif %}
+            {% if (field.maxlength): %}maxlength="{{ field.maxlength }}"{% endif %}
+            {% if (field.autocomplete): %}autocomplete="{{ field.autocomplete }}"{% endif %}
+            {% if (field.required): %}required{% endif %}
+          >
+        </label>
+        {% endfor %}
+      {% endif %}
+
+      {% if (auth_html): %}
+      <div class="wb-login-extra">{{ auth_html }}</div>
+      {% endif %}
+      {% if (auth_assets): %}
+        {% for (let asset in auth_assets): %}
+          {% if (asset.type == 'script'): %}
+          <script src="{{ asset.src }}"></script>
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+
+      <button type="submit" class="wb-btn primary wb-login-submit">{{ _('Sign in') }}</button>
+      <div class="wb-login-foot">
+        <span>{{ version.distname }} {{ version.distversion }}</span>
+        <a href="https://github.com/wundr-router/wundr" target="_blank" rel="noreferrer">Powered by Wundr</a>
+      </div>
+    </form>
+  </main>
+
+  <script>
+    (function () {
+      var pw = document.getElementsByName('luci_password')[0];
+      var user = document.getElementsByName('luci_username')[0];
+      if (user && !user.value) user.focus(); else if (pw) pw.focus();
+
+      var form = document.querySelector('.wb-login-card');
+      form.addEventListener('submit', function () {
+        var btn = form.querySelector('.wb-login-submit');
+        btn.disabled = true;
+        btn.textContent = {{ sprintf('%J', _('Signing in…')) }};
+      });
+
+      if (document.location.protocol != 'https:') {
+        {{ https_ports }}.forEach(function (port) {
+          var url = 'https://' + window.location.hostname + ':' + port + window.location.pathname;
+          var img = new Image();
+          img.onload = function () { window.location = url; };
+          img.src = 'https://' + window.location.hostname + ':' + port + '{{ resource }}/icons/loading.svg?' + Math.random();
+          setTimeout(function () { img.src = ''; }, 5000);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

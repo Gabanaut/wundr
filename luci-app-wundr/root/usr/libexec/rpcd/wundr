@@ -1,0 +1,85 @@
+#!/bin/sh
+# Wundr rpcd exec plugin for OpenWrt 23.05 / 24.x / 25.x.
+# Filename == ubus object name (rpcd exec.c/plugin.c registers it by
+# basename). Provides the one strictly-validated extra capability the UI
+# needs: bounded ping / traceroute diagnostics on explicit user request.
+# Every configuration write in Wundr goes through LuCI's native UCI + apply
+# path, so no other custom RPC is required.
+
+set -f
+umask 077
+
+CASE="$1"
+METHOD="$2"
+ARGS=''
+[ "$CASE" = call ] && ARGS=$(cat)
+
+json_get() { printf '%s' "$ARGS" | jsonfilter -e "$1" 2>/dev/null; }
+
+json_string() {
+	printf '%s' "$1" | awk 'BEGIN { ORS=""; first=1 } { if (!first) printf "\\n"; first=0; gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "\\r"); printf "%s", $0 }'
+}
+
+valid_uint() {
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
+}
+
+valid_target() {
+	[ "${#1}" -le 253 ] 2>/dev/null || return 1
+	case "$1" in
+		''|*[!A-Za-z0-9_.:-]*) return 1 ;;
+	esac
+	return 0
+}
+
+diagnostic() {
+	KIND=$(json_get '@.kind')
+	TARGET=$(json_get '@.target')
+	COUNT=$(json_get '@.count')
+	case "$KIND" in
+		ping|trace) ;;
+		*) echo '{"ok":0,"error":"kind must be ping or trace"}'; return ;;
+	esac
+	valid_target "$TARGET" || { echo '{"ok":0,"error":"target contains unsupported characters"}'; return; }
+	if [ "$KIND" = ping ]; then
+		[ -n "$COUNT" ] || COUNT=4
+		valid_uint "$COUNT" 1 20 || { echo '{"ok":0,"error":"count must be between 1 and 20"}'; return; }
+	fi
+	command -v timeout >/dev/null 2>&1 || { echo '{"ok":0,"error":"diagnostic timeout utility is unavailable"}'; return; }
+	if [ "$KIND" = ping ]; then
+		command -v ping >/dev/null 2>&1 || { echo '{"ok":0,"error":"ping is not installed"}'; return; }
+	else
+		TRACE_BIN=$(command -v traceroute 2>/dev/null || command -v tracepath 2>/dev/null || echo '')
+		[ -n "$TRACE_BIN" ] || { echo '{"ok":0,"error":"traceroute is not installed"}'; return; }
+	fi
+	TMP=$(mktemp /tmp/wundr_diag.XXXXXX 2>/dev/null) || { echo '{"ok":0,"error":"temporary output file is unavailable"}'; return; }
+	if [ "$KIND" = ping ]; then
+		timeout 12 ping -c "$COUNT" -W 2 "$TARGET" > "$TMP" 2>&1
+		STATUS=$?
+	else
+		timeout 12 "$TRACE_BIN" "$TARGET" > "$TMP" 2>&1
+		STATUS=$?
+	fi
+	OUTPUT=$(head -c 4096 "$TMP" 2>/dev/null || echo '')
+	rm -f "$TMP"
+	echo "{\"ok\":1,\"implemented\":true,\"kind\":\"$(json_string "$KIND")\",\"target\":\"$(json_string "$TARGET")\",\"exitCode\":$STATUS,\"output\":\"$(json_string "$OUTPUT")\"}"
+}
+
+case "$CASE" in
+	list)
+		echo '{"diagnostic":{"kind":"String","target":"String","count":"Integer"}}'
+		;;
+	call)
+		case "$METHOD" in
+			diagnostic) diagnostic ;;
+			*) echo '{"error":"unknown method"}'; exit 1 ;;
+		esac
+		;;
+	*)
+		echo '{"error":"invalid rpcd command"}'
+		exit 1
+		;;
+esac

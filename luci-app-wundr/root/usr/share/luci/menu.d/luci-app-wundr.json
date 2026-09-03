@@ -1,0 +1,125 @@
+{
+	"wundr/dashboard": {
+		"title": "Dashboard",
+		"order": 10,
+		"action": { "type": "view", "path": "wundr/dashboard" },
+		"depends": { "acl": [ "luci-app-wundr" ], "uci": { "wundr": true } }
+	},
+	"wundr/internet": {
+		"title": "Internet",
+		"order": 20,
+		"action": { "type": "view", "path": "wundr/internet" }
+	},
+	"wundr/network": {
+		"title": "Network",
+		"order": 30,
+		"action": { "type": "firstchild" }
+	},
+	"wundr/network/overview": {
+		"title": "Overview",
+		"order": 10,
+		"action": { "type": "view", "path": "wundr/network" }
+	},
+	"wundr/network/mode": {
+		"title": "Flat / VLAN Mode",
+		"order": 16,
+		"action": { "type": "view", "path": "wundr/network-mode" }
+	},
+	"wundr/network/wifi": {
+		"title": "Wi-Fi",
+		"order": 30,
+		"action": { "type": "view", "path": "wundr/wifi" }
+	},
+	"wundr/network/devices": {
+		"title": "Devices",
+		"order": 40,
+		"action": { "type": "view", "path": "wundr/devices" }
+	},
+	"wundr/network/map": {
+		"title": "Network Map",
+		"order": 45,
+		"action": { "type": "view", "path": "wundr/map" }
+	},
+	"wundr/network/qos": {
+		"title": "QoS",
+		"order": 50,
+		"action": { "type": "view", "path": "wundr/qos" }
+	},
+	"wundr/network/diagnostics": {
+		"title": "Diagnostics",
+		"order": 60,
+		"action": { "type": "view", "path": "wundr/diagnostics" }
+	},
+	"wundr/protection": {
+		"title": "Protection",
+		"order": 70,
+		"action": { "type": "firstchild" }
+	},
+	"wundr/protection/security": {
+		"title": "Security",
+		"order": 10,
+		"action": { "type": "view", "path": "wundr/shield" }
+	},
+	"wundr/protection/families": {
+		"title": "Families",
+		"order": 20,
+		"action": { "type": "view", "path": "wundr/families" }
+	},
+	"wundr/services": {
+		"title": "Services",
+		"order": 80,
+		"action": { "type": "firstchild" }
+	},
+	"wundr/services/apps": {
+		"title": "Apps",
+		"order": 10,
+		"action": { "type": "view", "path": "wundr/apps" }
+	},
+	"wundr/system": {
+		"title": "System",
+		"order": 90,
+		"action": { "type": "view", "path": "wundr/system" }
+	},
+	"wundr/network/lan-config": {
+		"title": "LAN & DHCP Settings",
+		"order": 15,
+		"action": { "type": "view", "path": "wundr/lan-config" }
+	},
+	"wundr/network/wifi-config": {
+		"title": "Wi-Fi Settings",
+		"order": 35,
+		"action": { "type": "view", "path": "wundr/wifi-config" }
+	},
+	"wundr/dashboard-direct": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/dashboard" }
+	},
+	"wundr/shield": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/protection/security" }
+	},
+	"wundr/families": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/protection/families" }
+	},
+	"wundr/apps": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/services/apps" }
+	},
+	"wundr/qos": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/network/qos" }
+	},
+	"wundr/wifi": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/network/wifi" }
+	},
+	"wundr/devices": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/network/devices" }
+	},
+	"wundr/map": {
+		"order": 900,
+		"action": { "type": "alias", "path": "wundr/network/map" }
+	}
+}

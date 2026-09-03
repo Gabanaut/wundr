@@ -1,0 +1,23 @@
+{
+	"luci-app-wundr": {
+		"description": "Wundr screens — read router state and drive native UCI writers",
+		"read": {
+			"ubus": {
+				"wundr": [ "diagnostic" ],
+				"luci-rpc": [ "getHostHints", "getDHCPLeases" ],
+				"luci": [ "getTimezones", "getRealtimeStats" ],
+				"system": [ "board", "info" ],
+				"network.interface": [ "dump" ],
+				"network.device": [ "status" ],
+				"iwinfo": [ "info", "assoclist" ],
+				"rc": [ "list" ],
+				"log": [ "read" ]
+			},
+			"uci": [ "wundr", "network", "wireless", "dhcp", "firewall", "system", "luci", "sqm" ]
+		},
+		"write": {
+			"uci": [ "wundr", "network", "wireless", "dhcp", "firewall" ],
+			"ubus": { "rc": [ "init" ] }
+		}
+	}
+}

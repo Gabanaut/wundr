@@ -1,0 +1,208 @@
+name: Build Wundr Packages
+
+# Modeled on the UniWRT production pipeline (uniwrt/.github/workflows/build.yml).
+#
+# Why gh-action-sdk@main and not a version tag: @v6's entrypoint mishandled
+# the SDK image layout and aborted with "sed: can't read feeds.conf.default"
+# before registering the repo as a feed. @main is the working entrypoint.
+#
+# Package format follows the SDK branch:
+#   23.05 / 24.10  -> opkg -> .ipk
+#   25.12+         -> apk  -> .apk
+# Both packages are arch-independent (LUCI_PKGARCH:=all), so one x86_64 SDK
+# per release produces the universal package — pick by OpenWrt version,
+# not router CPU.
+
+env:
+  PACKAGES: luci-theme-wundr luci-app-wundr
+  FEEDNAME: wundr
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+    paths:
+      - 'luci-theme-wundr/**'
+      - 'luci-app-wundr/**'
+      - '.github/workflows/build.yml'
+      - 'smoke/qa-static.sh'
+  pull_request:
+    paths:
+      - 'luci-theme-wundr/**'
+      - 'luci-app-wundr/**'
+      - '.github/workflows/build.yml'
+      - 'smoke/qa-static.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: wundr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  qa:
+    name: Static QA
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install QA dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nodejs python3-yaml
+
+      - name: Run static QA
+        run: bash ./smoke/qa-static.sh
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: qa
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: '23.05.6'
+            arch: x86_64-23.05.6
+            extension: ipk
+            label: 'legacy .ipk for OpenWrt 23.05.x'
+          - release: '24.10.6'
+            arch: x86_64-24.10.6
+            extension: ipk
+            label: 'current .ipk for OpenWrt 24.10.x'
+          - release: '25.12.4'
+            arch: x86_64-25.12.4
+            extension: apk
+            label: 'modern .apk for OpenWrt 25.12.x+'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build packages with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}
+          FEEDNAME: ${{ env.FEEDNAME }}
+          PACKAGES: ${{ env.PACKAGES }}
+          V: s
+
+      - name: Collect packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find "$GITHUB_WORKSPACE/bin" -type f \( -name 'luci-theme-wundr*.${{ matrix.extension }}' -o -name 'luci-app-wundr*.${{ matrix.extension }}' \) -print -exec cp -v {} dist/ \;
+          echo "Built package list:"
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort
+          test "$(find dist -maxdepth 1 -type f -name 'luci-theme-wundr*.${{ matrix.extension }}' | wc -l)" -ge 1 || {
+            echo "::error::No luci-theme-wundr .${{ matrix.extension }} package was produced for OpenWrt ${{ matrix.release }}"
+            exit 1
+          }
+          test "$(find dist -maxdepth 1 -type f -name 'luci-app-wundr*.${{ matrix.extension }}' | wc -l)" -ge 1 || {
+            echo "::error::No luci-app-wundr .${{ matrix.extension }} package was produced for OpenWrt ${{ matrix.release }}"
+            exit 1
+          }
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wundr-${{ matrix.release }}-${{ matrix.extension }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.ipk' -o -name '*.apk' \) -print -exec cp -v {} release/ \;
+          test "$(find release -type f \( -name '*.ipk' -o -name '*.apk' \) | wc -l)" -ge 6 || {
+            echo "::error::Expected at least 6 package assets (2 packages x 3 releases); found fewer"
+            find release -type f -printf '%f\n'
+            exit 1
+          }
+          ( cd release && sha256sum * > SHA256SUMS )
+          ls -la release
+
+      - name: Choose release tag
+        id: release_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}"   >> "$GITHUB_OUTPUT"
+            echo "title=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"         >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nightly"              >> "$GITHUB_OUTPUT"
+            echo "title=Nightly build #${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"          >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reset rolling nightly release
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release delete nightly --yes --cleanup-tag || true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: ${{ steps.release_tag.outputs.title }}
+          prerelease: ${{ steps.release_tag.outputs.prerelease }}
+          make_latest: ${{ github.ref_type == 'tag' }}
+          fail_on_unmatched_files: true
+          files: release/*
+          body: |
+            Automated Wundr build from `${{ github.sha }}`.
+
+            Pick by **OpenWrt version**, not router CPU — both packages are
+            architecture-independent.
+
+            | OpenWrt version | Package manager | Assets |
+            |---:|:---:|:---|
+            | 23.05.x | opkg | `luci-{theme,app}-wundr_*_all.ipk` |
+            | 24.10.x | opkg | `luci-{theme,app}-wundr_*_all.ipk` |
+            | 25.12.x and newer | apk | `luci-{theme,app}-wundr-*.apk` |
+
+            Install **both** packages (the app depends on the theme):
+
+            ```sh
+            # OpenWrt 23.05 / 24.10
+            opkg install ./luci-theme-wundr_*_all.ipk
+            opkg install ./luci-app-wundr_*_all.ipk
+            /etc/init.d/rpcd restart
+
+            # OpenWrt 25.12+
+            apk add --allow-untrusted ./luci-theme-wundr-*.apk
+            apk add --allow-untrusted ./luci-app-wundr-*.apk
+            /etc/init.d/rpcd restart
+            ```
+
+            Verify the checksums against `SHA256SUMS` before installing.

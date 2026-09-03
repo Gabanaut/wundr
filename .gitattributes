@@ -1,0 +1,14 @@
+# Normalize all text to LF in the index/checkout. Shell scripts on the router
+# MUST keep LF + a shebang; CRLF breaks `#!/bin/sh` and the LuCI ucode loader.
+* text=auto eol=lf
+
+# Never let Git touch these (binary or exact-bytes matters for the size budget)
+*.svg  binary
+*.png  binary
+*.gz   binary
+*.ipk  binary
+*.apk  binary
+
+# Executables that must install as +x on the router
+luci-app-wundr/root/usr/libexec/rpcd/*          text eol=lf
+luci-app-wundr/root/etc/uci-defaults/*          text eol=lf

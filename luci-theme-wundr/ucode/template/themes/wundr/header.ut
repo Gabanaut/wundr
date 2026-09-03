@@ -1,0 +1,147 @@
+{# Wundr theme — LuCI header template (OpenWrt 23.05 / 24.x / 25.x ucode) #}
+{%
+	import { getuid, getspnam } from 'luci.core';
+
+	const boardinfo = ubus.call('system', 'board') ?? {};
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}">
+<head>
+  <meta charset="utf-8">
+  <title>{{ striptags(`${boardinfo.hostname ?? 'OpenWrt'}${dispatched?.title ? ` | ${_(dispatched.title)}` : ' · Wundr'}`) }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="darkreader-lock">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="{{ media }}/brand-mark.svg" type="image/svg+xml">
+  <script>
+    /* Apply the saved appearance before first paint to avoid a light/dark flash. */
+    (function () {
+      try {
+        var t = localStorage.getItem('wb-theme');
+        if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ media }}/cascade.css?v=0.2.0">
+  <link rel="stylesheet" href="{{ media }}/app.css?v=0.2.0">
+  {% if (dispatched?.css): %}
+  <link rel="stylesheet" href="{{ resource }}/{{ dispatched.css }}">
+  {% endif %}
+  {% if (css): %}
+  <style title="text/css">{{ css }}</style>
+  {% endif %}
+  <script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+  <script src="{{ resource }}/cbi.js"></script>
+  <script src="{{ media }}/icons.js?v=0.2.0"></script>
+  <script src="{{ media }}/charts.js?v=0.2.0"></script>
+  <script src="{{ media }}/qr.js?v=0.2.0"></script>
+  <script src="{{ media }}/map-graph.js?v=0.2.0"></script>
+</head>
+<body class="lang_{{ dispatcher.lang }} wundr" data-page="{{ entityencode(join('-', length(ctx.request_path) ? ctx.request_path : ctx.path), true) }}">
+  {% if (!blank_page): %}
+  <header class="wb-topbar">
+    <button class="wb-navtoggle" type="button" aria-label="{{ _('Toggle navigation') }}" aria-controls="wb-sidenav" aria-expanded="false">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <a class="wb-brand" href="{{ dispatcher.build_url('wundr/dashboard') }}" aria-label="{{ _('Wundr dashboard') }}">
+      <svg class="wb-logo" viewBox="0 0 40 44" aria-hidden="true"><path class="wb-logo-wave" d="M6 12a19 19 0 0 1 28 0"/><path class="wb-logo-wave wb-logo-wave-2" d="M11 18a12 12 0 0 1 18 0"/><path class="wb-logo-frame" d="M16 24a5.5 5.5 0 0 1 8 0"/><path class="wb-logo-path" d="M9 26l4 11 7-14 7 14 4-11"/></svg>
+      <span class="wb-brand-text">Wundr<small>{{ striptags(boardinfo.hostname ?? '') }}</small></span>
+    </a>
+    <div class="wb-search" role="search">
+      <svg class="wb-search-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>
+      <input type="search" id="wb-menu-search" placeholder="{{ _('Search…') }}" aria-label="{{ _('Search pages') }}" autocomplete="off">
+      <kbd class="wb-search-kbd" aria-hidden="true">Ctrl K</kbd>
+      <div class="wb-search-results" id="wb-search-results" role="listbox" hidden></div>
+    </div>
+    <div class="wb-statusrail" id="wb-statusrail" aria-live="off"></div>
+    <div id="indicators" class="wb-indicators"></div>
+    <div class="wb-palette-wrapper">
+      <button class="wb-icon-btn" id="wb-palette-btn" type="button" aria-label="{{ _('Choose color palette') }}" title="{{ _('Color palette') }}" aria-haspopup="true" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".6" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".6" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".6" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".6" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+      </button>
+      <div class="wb-popover" id="wb-palette-popover" hidden></div>
+    </div>
+    <button class="wb-icon-btn" id="wb-theme-toggle" type="button" aria-label="{{ _('Toggle dark mode') }}" title="{{ _('Dark / light mode') }}">
+      <svg class="wb-sun-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.2M12 19.8V22M3.5 3.5l1.6 1.6M18.9 18.9l1.6 1.6M2 12h2.2M19.8 12H22M3.5 20.5l1.6-1.6M18.9 5.1l1.6-1.6"/></svg>
+      <svg class="wb-moon-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z"/></svg>
+    </button>
+    <a class="wb-icon-btn wb-logout" href="{{ dispatcher.build_url('admin/logout') }}" title="{{ _('Sign out') }}" aria-label="{{ _('Sign out') }}">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4M15 8l5 4-5 4M20 12H9"/></svg>
+    </a>
+  </header>
+  <div class="wb-shell">
+    <nav class="wb-sidenav" id="wb-sidenav" aria-label="{{ _('Main navigation') }}">
+      <ul class="wb-nav">
+        <li><a href="{{ dispatcher.build_url('wundr/dashboard') }}" data-nav="wundr/dashboard"><span class="wb-nav-ico" data-icon="dashboard"></span><span>{{ _('Dashboard') }}</span></a></li>
+        <li><a href="{{ dispatcher.build_url('wundr/internet') }}" data-nav="wundr/internet"><span class="wb-nav-ico" data-icon="internet"></span><span>{{ _('Internet') }}</span></a></li>
+
+        <li class="wb-nav-group is-open" data-nav-group="network">
+          <button class="wb-nav-group-toggle" type="button" aria-expanded="true" aria-controls="wb-nav-network"><span class="wb-nav-ico" data-icon="port"></span><span>{{ _('Network') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
+          <ul class="wb-nav-sub" id="wb-nav-network">
+            <li><a href="{{ dispatcher.build_url('wundr/network/overview') }}" data-nav="wundr/network/overview wundr/network/lan-config wundr/network/mode"><span>{{ _('Overview') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/wifi') }}" data-nav="wundr/network/wifi wundr/network/wifi-config"><span>{{ _('Wi-Fi') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/devices') }}" data-nav="wundr/network/devices"><span>{{ _('Devices') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/map') }}" data-nav="wundr/network/map"><span>{{ _('Network Map') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/qos') }}" data-nav="wundr/network/qos"><span>{{ _('QoS') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/diagnostics') }}" data-nav="wundr/network/diagnostics"><span>{{ _('Diagnostics') }}</span></a></li>
+          </ul>
+        </li>
+
+        <li class="wb-nav-group" data-nav-group="protection">
+          <button class="wb-nav-group-toggle" type="button" aria-expanded="false" aria-controls="wb-nav-protection"><span class="wb-nav-ico" data-icon="shield"></span><span>{{ _('Protection') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
+          <ul class="wb-nav-sub" id="wb-nav-protection">
+            <li><a href="{{ dispatcher.build_url('wundr/protection/security') }}" data-nav="wundr/protection/security"><span>{{ _('Security') }}</span></a></li>
+            {% if (dispatcher.lookup('admin/network/firewall')): %}
+            <li><a href="{{ dispatcher.build_url('admin/network/firewall') }}" data-nav="admin/network/firewall"><span>{{ _('Firewall (Advanced)') }}</span></a></li>
+            {% endif %}
+            <li><a href="{{ dispatcher.build_url('wundr/protection/families') }}" data-nav="wundr/protection/families"><span>{{ _('Families') }}</span></a></li>
+          </ul>
+        </li>
+
+        <li class="wb-nav-group" data-nav-group="services">
+          <button class="wb-nav-group-toggle" type="button" aria-expanded="false" aria-controls="wb-nav-services"><span class="wb-nav-ico" data-icon="apps"></span><span>{{ _('Services') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
+          <ul class="wb-nav-sub" id="wb-nav-services">
+            <li><a href="{{ dispatcher.build_url('wundr/services/apps') }}" data-nav="wundr/services/apps"><span>{{ _('Apps') }}</span></a></li>
+          </ul>
+        </li>
+
+        <li><a href="{{ dispatcher.build_url('wundr/system') }}" data-nav="wundr/system"><span class="wb-nav-ico" data-icon="system"></span><span>{{ _('System') }}</span></a></li>
+      </ul>
+      <div class="wb-pro">
+        <button class="wb-pro-toggle" id="wb-pro-toggle" type="button" aria-controls="wb-pro-drawer" aria-expanded="false">
+          <span class="wb-nav-ico" data-icon="sliders"></span><span>{{ _('Advanced (full LuCI)') }}</span>
+        </button>
+      </div>
+    </nav>
+    <main class="wb-content" id="maincontent">
+      {% if (getuid() == 0 && getspnam('root')?.pwdp === ''): %}
+        <div class="alert-message warning">
+          <h4>{{ _('No password set!') }}</h4>
+          <p>{{ _('There is no password set on this router. Please configure a root password to protect the web interface.') }}</p>
+          {% if (dispatcher.lookup('admin/system/admin')): %}
+            <div class="right"><a class="btn cbi-button" href="{{ dispatcher.build_url('admin/system/admin') }}">{{ _('Go to password configuration...') }}</a></div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if (boardinfo.rootfs_type == "initramfs"): %}
+        <div class="alert-message warning">
+          <h4>{{ _('System running in recovery (initramfs) mode.') }}</h4>
+          <p>{{ _('No changes to settings will be stored and are lost after rebooting. This mode should only be used to install a firmware upgrade') }}</p>
+          {% if (dispatcher.lookup('admin/system/flash')): %}
+            <div class="right"><a class="btn cbi-button" href="{{ dispatcher.build_url('admin/system/flash') }}">{{ _('Go to firmware upgrade...') }}</a></div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <noscript>
+        <div class="alert-message warning">
+          <h4>{{ _('JavaScript required!') }}</h4>
+          <p>{{ _('You must enable JavaScript in your browser or LuCI will not work properly.') }}</p>
+        </div>
+      </noscript>
+
+      <div id="tabmenu" style="display:none"></div>
+  {% endif %}

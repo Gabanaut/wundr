@@ -1,0 +1,20 @@
+# Non-production material (prototypes, mockups, plans, audits, vendored sources)
+extras/
+
+# Build outputs
+bin/
+dist/
+*.ipk
+*.apk
+*.tar.gz
+
+# Local tooling
+node_modules/
+smoke/.cache/
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp

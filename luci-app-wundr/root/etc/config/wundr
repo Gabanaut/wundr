@@ -1,0 +1,14 @@
+# Wundr router-side state.
+#
+# Per-user appearance (theme, palette, sidebar state) lives in browser
+# localStorage, not here. This file holds router state only:
+#   • global.enabled  — menu visibility flag consumed by menu.d ("uci:wundr")
+#   • @family[...]    — profiles written by the Families screen. Each owns a
+#     set of device MACs, a control mode and an optional bedtime window.
+#
+# The derived firewall enforcement (rules named wundr_* in /etc/config/
+# firewall) is rebuilt from these profiles on every save, so a stale edit
+# can never strand a rule. Nothing writes outside LuCI's own UCI path.
+
+config global 'global'
+	option enabled '1'
