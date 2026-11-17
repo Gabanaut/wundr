@@ -2,7 +2,6 @@
 'require view';
 'require uci';
 'require firewall';
-'require network';
 'require dom';
 'require wundr.ui as wb';
 
@@ -22,33 +21,19 @@ function splitList(v) {
 function computeChecks(zones) {
 	var out = [];
 	var wan = zones.filter(function(z) { return z.getName() === 'wan'; })[0];
-	var custom = uci.sections('firewall', 'rule').filter(function(r) { return !/^wundr_/.test(String(r.name || '')); });
-	var redirs = uci.sections('firewall', 'redirect');
-
-	var wanInput = wan ? String(uci.get('firewall', wan['.name'], 'input') || 'DROP').toUpperCase() : 'DROP';
-	out.push({ name: _('Internet side drops unsolicited traffic'), ok: wanInput !== 'ACCEPT', detail: 'wan "input" = ' + wanInput });
-
-	var synOn = zones.some(function(z) { return uci.get('firewall', z['.name'], 'syn_flood') === '1'; });
-	out.push({ name: _('SYN-flood protection'), ok: synOn, detail: synOn ? _('Enabled on at least one zone.') : _('Disabled — enable under Zones for internet-facing routers.') });
-
-	var broad = custom.filter(function(r) {
-		if (String(r.target || '').toUpperCase() !== 'ACCEPT') return false;
-		var src = String(r.src || '').toLowerCase();
-		return src === 'wan' || src === '*';
+	var wanInput = wan ? String(wan.getInput() || '').toUpperCase() : '';
+	out.push({ name: _('WAN default input policy'), ok: wanInput === 'ACCEPT' ? false : /^(DROP|REJECT)$/.test(wanInput) ? true : null,
+		detail: wanInput ? _('Policy before exceptions: %s').format(wanInput) : _('No policy reported for a zone named wan.') });
+	var defaults = uci.sections('firewall', 'defaults')[0] || {};
+	var syn = defaults.synflood_protect != null ? defaults.synflood_protect : defaults.syn_flood;
+	var synOn = syn == null ? null : /^(1|on|yes|true)$/i.test(syn);
+	out.push({ name: _('SYN-flood protection'), ok: synOn, detail: synOn == null ? _('Not set explicitly in firewall defaults.') : synOn ? _('Enabled in firewall defaults.') : _('Disabled in firewall defaults.') });
+	var incoming = uci.sections('firewall', 'rule').filter(function(rule) {
+		return !/^(0|off|no|false)$/i.test(rule.enabled) && (rule.src === 'wan' || rule.src === '*') && String(rule.target).toUpperCase() === 'ACCEPT';
 	});
-	out.push({ name: _('Loose allow rules from the internet'), ok: !broad.length, detail: broad.length ? broad.length + ' broad ACCEPT rule(s) to review.' : _('None detected.') });
-
-	var upnps = redirs.filter(function(r) { return /upnp/i.test(String(r.name || '')); }).length;
-	out.push({ name: _('UPnP-created port opens'), ok: upnps === 0, detail: upnps + ' forward(s) look UPnP-created.' });
-
-	out.push({ name: _('Explicit port forwards'), ok: redirs.length <= 6, detail: redirs.length + ' active — each is a door in from the internet.' });
-
-	var dns = uci.sections('dhcp', 'dnsmasq')[0] || {};
-	out.push({
-		name: _('Clients forced to use router DNS'), ok: dns.noresolv === '1',
-		detail: dns.noresolv === '1' ? _('Upstream resolvers will not leak to clients.') : _('Clients receive provider DNS via DHCP. Set DHCP DNS to filter.'),
-		link: [ 'wundr/network/lan-config', _('Open LAN & DHCP') ]
-	});
+	out.push({ name: _('Incoming allow rules'), ok: null, detail: _('%d enabled rules from WAN or any zone. Their port and address limits are in Firewall rules.').format(incoming.length) });
+	out.push({ name: _('UPnP mappings'), ok: null, detail: _('Dynamic mappings are not listed in the static firewall configuration.') });
+	out.push({ name: _('Client DNS'), ok: null, detail: _('DHCP can suggest resolvers; that does not prevent clients from choosing another one.'), link: [ 'wundr/network/lan-config', _('Open LAN & DHCP') ] });
 
 	return out;
 }
@@ -82,7 +67,7 @@ return view.extend({
 			uci.load('firewall'),
 			uci.load('dhcp'),
 			firewall.getZones(),
-			L.resolveDefault(network.getHostHints(), {})
+			wb.hostHints()
 		]);
 	},
 
@@ -150,7 +135,7 @@ return view.extend({
 				uci.set('firewall', sid, 'src_dport', ext);
 				uci.set('firewall', sid, 'dest_ip', dstIp);
 				uci.set('firewall', sid, 'dest_port', dstPort);
-				return wb.apply(false, _('Port forward added'), nm + ' → ' + dstIp + ':' + dstPort)
+				return wb.apply(false)
 					.then(function() { return uci.load('firewall'); }).then(rerender);
 			}, { ok: _('Add forward') });
 		}
@@ -162,19 +147,12 @@ return view.extend({
 			var appCount = checks.filter(function(c) { return c.ok === true || c.ok === false; }).length;
 			var failing = checks.filter(function(c) { return c.ok === false; });
 
-			var Circ = 2 * Math.PI * 42;
-			var ringColor = score == null ? 'var(--wb-border)' : (score >= 80 ? 'var(--wb-good)' : (score >= 50 ? 'var(--wb-warn)' : 'var(--wb-bad)'));
-			var ring = E('div', { 'class': 'wb-score' }, [
-				E('svg', { 'viewBox': '0 0 100 100' }, [
-					E('circle', { 'class': 'track', 'cx': '50', 'cy': '50', 'r': '42' }),
-					E('circle', { 'class': 'val', 'style': 'stroke:' + ringColor, 'cx': '50', 'cy': '50', 'r': '42', 'stroke-dasharray': String(Circ), 'stroke-dashoffset': String(Circ * (score == null ? 1 : 1 - score / 100)) })
-				]),
-				E('span', { 'class': 'num' }, [ String(score == null ? '—' : score) ])
-			]);
+			var ring = wb.percentRing(_('Security checks passing'), function(percent) { return percent >= 80 ? 'good' : percent >= 50 ? 'warn' : 'bad'; });
+			ring.update(score);
 
 			var checkItems = checks.map(function(c) {
 				return E('div', { 'class': 'wb-check' }, [
-					E('span', { 'class': 'mark ' + (c.ok === true ? 'good' : (c.ok === false ? 'bad' : 'warn')) }, [ c.ok === true ? '✓' : '!' ]),
+					E('span', { 'class': 'mark ' + (c.ok === true ? 'good' : c.ok === false ? 'bad' : 'mut') }, [ c.ok === true ? '✓' : c.ok === false ? '!' : 'i' ]),
 					E('div', { 'style': 'flex:1;min-width:0' }, [ E('div', { 'class': 'name' }, [ c.name ]), E('div', { 'class': 'meta' }, [ c.detail ]) ]),
 					c.link ? linkBtn(c.link[0], c.link[1]) : ''
 				]);
@@ -191,14 +169,14 @@ return view.extend({
 						wb.toggle(on, function(next) {
 							if (next) uci.unset('firewall', sid, 'enabled');
 							else uci.set('firewall', sid, 'enabled', '0');
-							return wb.apply(false, next ? _('Port forward enabled') : _('Port forward disabled'), r.name || sid)
+							return wb.apply(false)
 								.then(function() { return uci.load('firewall'); }).then(rerender);
 						}, { 'aria-label': _('Enable port forward') }),
 						wb.iconButton('trash', _('Delete port forward'), { 'class': 'wb-icon-btn sm danger', 'click': function() {
 							wb.confirm(_('Delete “%s”?').format(r.name || sid), _('This closes the forwarded WAN port immediately.'), { ok: _('Delete'), danger: true }).then(function(yes) {
 								if (!yes) return;
 								uci.remove('firewall', sid);
-								return wb.apply(false, _('Port forward deleted'), r.name || sid)
+								return wb.apply(false)
 									.then(function() { return uci.load('firewall'); }).then(rerender);
 							});
 						} })
@@ -231,9 +209,9 @@ return view.extend({
 			dom.content(mount, [
 				E('section', { 'class': 'wb-card wb-hero' }, [
 					E('div', { 'style': 'display:flex;align-items:center;gap:22px;flex-wrap:wrap' }, [
-						ring,
+						ring.node,
 						E('div', { 'style': 'flex:1;min-width:220px' }, [
-							E('h2', { 'class': 'wb-h', 'style': 'margin:0 0 4px' }, [ score == null ? _('Security posture unavailable') : (score >= 80 ? _('Your network looks protected') : (score >= 50 ? _('Worth tightening') : _('Attention needed'))) ]),
+							E('h2', { 'class': 'wb-h', 'style': 'margin:0 0 4px' }, [ _('Firewall overview') ]),
 							E('div', { 'class': 'wb-sub' }, [ passCount + ' / ' + appCount + ' ' + _('security checks passing') ]),
 							failing.length ? E('div', { 'class': 'wb-sub', 'style': 'margin-top:6px;color:var(--wb-warn)' }, [ failing.map(function(c) { return c.name; }).join(' · ') ]) : ''
 						]),

@@ -66,6 +66,8 @@ return view.extend({
 		var memLbl = E('b', {}, [ u ? u.pct + '% · ' + fmt(u.used) + ' / ' + fmt(u.total) : '—' ]);
 		var upEl = E('b', {}, [ wb.fmtUptime(info.uptime) ]);
 		var tzLabel = E('b', {}, [ info.localtime ? new Date(info.localtime * 1000).toLocaleString() : '—' ]);
+		var ring = wb.percentRing(_('Memory used'), function(percent) { return percent > 90 ? 'bad' : percent > 80 ? 'warn' : 'good'; });
+		ring.update(u && u.pct);
 
 		function refreshCounters() {
 			return L.resolveDefault(callInfo(), {}).then(function(i) {
@@ -78,6 +80,7 @@ return view.extend({
 				}
 				var x = usage(i.memory);
 				if (x) {
+					ring.update(x.pct);
 					memLbl.textContent = x.pct + '% · ' + fmt(x.used) + ' / ' + fmt(x.total);
 					memBar.style.width = x.pct + '%';
 					memBar.parentNode.className = 'wb-bar' + (x.pct > 90 ? ' bad' : (x.pct > 80 ? ' warn' : ''));
@@ -157,20 +160,11 @@ return view.extend({
 		});
 
 		return m.render().then(function(formNode) {
-			var C = 2 * Math.PI * 42, pct = u ? u.pct : 0;
-			var ring = E('div', { 'class': 'wb-score ' + (pct > 80 ? 'bad' : (pct > 60 ? 'warn' : 'good')), 'style':'width:96px;height:96px' }, [
-				E('svg', { 'viewBox': '0 0 100 100' }, [
-					E('circle', { 'class': 'track', 'cx': '50', 'cy': '50', 'r': '42' }),
-					E('circle', { 'class': 'val', 'cx': '50', 'cy': '50', 'r': '42', 'stroke-dasharray': String(C), 'stroke-dashoffset': String(C * (1 - pct / 100)) })
-				]),
-				E('span', { 'class': 'num' }, [ String(pct) ])
-			]);
-
 			var statusCard = E('section', { 'class': 'wb-card wb-hero' }, [
 				E('h2', { 'class': 'wb-h' }, [ (board.hostname || 'OpenWrt') ]),
 				E('div', { 'class': 'wb-sub' }, [ (rel.description || (rel.distribution || 'OpenWrt') + ' ' + (rel.version || '')) + (board.model ? ' · ' + board.model : '') + (board.kernel ? ' · kernel ' + board.kernel : '') ]),
 				E('div', { 'style': 'display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:14px' }, [
-					ring, E('div', {}, [
+					ring.node, E('div', {}, [
 						E('div', { 'class': 'wb-bar-label' }, [ E('span', {}, [ _('Memory used') ]), memLbl ]),
 						E('div', { 'class': 'wb-bar' }, [ memBar ])
 					]),

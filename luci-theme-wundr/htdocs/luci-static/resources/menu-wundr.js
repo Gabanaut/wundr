@@ -136,13 +136,16 @@ return baseclass.extend({
 		const container = document.querySelector('#wb-pro-drawer-menu');
 		if (!container) return;
 
-		const children = ui.menu.getChildren(tree);
+		const admin = (tree && tree.children && tree.children.admin) ? tree.children.admin : tree;
+		const children = ui.menu.getChildren(admin);
 		children.forEach(child => {
-			if (child.name === 'wundr') return; // Skip wundr root in pro tree
+			if (child.name === 'wundr' || child.name === 'logout' || child.name === 'uci' || child.name === 'ubus' || child.name === 'menu') return;
 
+			const baseUrl = (admin === tree) ? child.name : ('admin/' + child.name);
+			const sub = this.renderSubMenu(child, baseUrl);
 			const section = E('div', { 'class': 'wb-pro-section' }, [
 				E('h4', {}, [ _(child.title) ]),
-				this.renderSubMenu(child, child.name)
+				sub
 			]);
 			container.appendChild(section);
 		});
@@ -150,7 +153,7 @@ return baseclass.extend({
 
 	renderSubMenu(node, url) {
 		const children = ui.menu.getChildren(node);
-		if (!children.length) return E('');
+		if (!children.length) return E([]);
 
 		const ul = E('ul', { 'class': 'wb-pro-links' });
 		children.forEach(child => {
@@ -158,7 +161,7 @@ return baseclass.extend({
 			const hasSub = ui.menu.getChildren(child).length > 0;
 			ul.appendChild(E('li', {}, [
 				E('a', { 'href': linkUrl }, [ _(child.title) ]),
-				hasSub ? this.renderSubMenu(child, url + '/' + child.name) : E('')
+				hasSub ? this.renderSubMenu(child, url + '/' + child.name) : E([])
 			]));
 		});
 		return ul;

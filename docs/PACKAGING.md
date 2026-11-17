@@ -91,6 +91,8 @@ The rpcd plugin ships executable via git mode bits — verify after clone:
 
 ## Install on the router
 
+**Existing v0.3.0 segments:** The original segment wizard could create a forward to `lan` and set the zone's input policy to `ACCEPT`. Installing an updated UI does not rewrite existing firewall rules. For a guest or IoT segment, review its zone, forwardings, and router service exceptions in native LuCI before connecting untrusted devices. Back up the configuration first.
+
 ```sh
 # copy
 scp bin/packages/*/*/luci-*wundr*.ipk root@192.168.0.1:/tmp/

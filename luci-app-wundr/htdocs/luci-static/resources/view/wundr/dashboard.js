@@ -185,8 +185,9 @@ return view.extend({
 			});
 			var ssids = (d.wifiNets || []).filter(function(n) { return n.getMode() === 'ap' || !n.getMode(); }).map(function(n) {
 				var idx = (d.wifiNets || []).indexOf(n);
+				var radio = d.radios.find(function(item) { return item.getName() === n.getWifiDeviceName(); });
 				return E('div', { 'class': 'wb-setting' }, [
-					E('div', { 'class': 'grow' }, [ E('div', { 'class': 'name' }, [ n.getActiveSSID() || n.getSSID() || _('Unnamed') ]), E('div', { 'class': 'meta' }, [ wb.bandLabel(n.getWifiDevice() ? n.getWifiDevice().get('band') : null, n.getChannel()) + ' · ' + wb.encryptionLabel(n.get('encryption')) ]) ]),
+					E('div', { 'class': 'grow' }, [ E('div', { 'class': 'name' }, [ n.getActiveSSID() || n.getSSID() || _('Unnamed') ]), E('div', { 'class': 'meta' }, [ wb.bandLabel(radio && radio.get('band'), n.getChannel()) + ' · ' + wb.encryptionLabel(n.get('encryption')) ]) ]),
 					wb.pill(n.isUp() ? (((d.assocs[idx]) || []).length + ' ' + _('clients')) : (n.isDisabled() ? _('Off') : _('Down')), n.isUp() ? 'good' : 'mut')
 				]);
 			});
@@ -203,7 +204,7 @@ return view.extend({
 			var canvas = E('canvas');
 			var label = E('div', { 'class': 'wb-qr-ssid' });
 			function redraw() {
-				var s = uci.get_all('wireless', pick.value) || {};
+				var s = uci.get('wireless', pick.value) || {};
 				var enc = String(s.encryption || 'none');
 				var type = enc === 'none' || enc === 'owe' ? 'nopass' : 'WPA';
 				if (window.WBQR) WBQR.draw(canvas, WBQR.wifiString(s.ssid, s.key || '', type, s.hidden === '1'), { size: 240 });

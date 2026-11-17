@@ -16,15 +16,16 @@ var callList = rpc.declare({ object: 'rc', method: 'list', expect: { '': {} } })
 
 return view.extend({
 	load: function() {
-		return L.resolveDefault(callList(), {}).then(function(rc) {
-			var haveSqm = Object.keys(rc || {}).some(function(n) { return /^sqm/i.test(n); });
-			if (!haveSqm) return { haveSqm: false };
+		return L.resolveDefault(callList(), null).then(function(rc) {
+			if (!rc) return { unavailable: true };
+			if (!Object.prototype.hasOwnProperty.call(rc, 'sqm')) return { haveSqm: false };
 			return uci.load('sqm').then(function() { return { haveSqm: true }; })
-				.catch(function() { return { haveSqm: true, empty: true }; });
+				.catch(function() { return { unavailable: true }; });
 		});
 	},
 
 	render: function(state) {
+		if (state.unavailable) return wb.card(_('Quality of service'), [ wb.empty(_('Could not read SQM settings. Check your permissions and reload this page.')) ]);
 		if (!state.haveSqm) {
 			return E('div', {}, [
 				wb.hero(_('Quality of service'), _('Stop one heavy download from ruining video calls for everyone else.'), [], [
@@ -50,32 +51,32 @@ return view.extend({
 		s.nodescriptions = true;
 
 		var o = s.option(form.Flag, 'enabled', _('Enabled'));
-		o.default = o.enabled;
+		o.rmempty = false;
 
-		o = s.option(widgets.NetworkSelect, 'interface', _('Interface'), _('The uplink this queue shapes.'));
+		o = s.option(widgets.DeviceSelect, 'interface', _('Network device'), _('The uplink device this queue shapes.'));
 		o.nocreate = true;
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'download', _('Download (kbit/s)'), _('Optional — SQM can often auto-detect. e.g. 90000 for ~90 Mbit.'));
-		o.datatype = 'or(uinteger, string)';
-		o.rmempty = true;
+		o = s.option(form.Value, 'download', _('Download (kbit/s)'), _('Use 0 to turn off download shaping.'));
+		o.datatype = 'uinteger';
+		o.rmempty = false;
 
-		o = s.option(form.Value, 'upload', _('Upload (kbit/s)'));
-		o.datatype = 'or(uinteger, string)';
-		o.rmempty = true;
+		o = s.option(form.Value, 'upload', _('Upload (kbit/s)'), _('Use 0 to turn off upload shaping.'));
+		o.datatype = 'uinteger';
+		o.rmempty = false;
 
-		o = s.option(form.ListValue, 'qd', _('Queue discipline'));
-		o.optional = true;
-		o.value('', _('cake (default — best all-round)'));
-		o.value('cake', _('cake'));
-		o.value('fq_codel', _('fq_codel'));
-		o.rmempty = true;
+		o = s.option(form.ListValue, 'qdisc', _('Queue discipline'));
+		var disciplines = new Set([ 'cake', 'fq_codel' ]);
+		uci.sections('sqm', 'queue').forEach(function(queue) { if (queue.qdisc) disciplines.add(queue.qdisc); });
+		disciplines.forEach(function(name) { o.value(name, name); });
+		o.default = 'cake';
+		o.rmempty = false;
 
 		return m.render().then(function(node) {
-			var active = uci.sections('sqm', 'queue').filter(function(q) { return q.enabled === '1' || q.enabled == null; }).length;
+			var active = uci.sections('sqm', 'queue').filter(function(q) { return q.enabled === '1'; }).length;
 			return E('div', {}, [
 				wb.hero(_('Quality of service'), _('Real bufferbloat control via SQM. Pick an interface and the two line speeds – that is all most homes need.'), [
-					wb.stat(String(active), _('Active queues')),
+					wb.stat(String(active), _('Enabled queues')),
 					wb.stat(String(uci.sections('sqm', 'queue').length), _('Configured'))
 				]),
 				node,

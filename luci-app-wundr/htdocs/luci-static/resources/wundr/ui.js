@@ -3,11 +3,15 @@
 'require ui';
 'require uci';
 'require dom';
+'require rpc';
 
 /* Wundr shared view helpers: DOM primitives, formatting and the
  * save-and-apply flow used by every Wundr screen. Writes always go through
  * LuCI's own uci.js staging + ui.changes.apply() so they are validated,
  * atomic and (for checked applies) rollback-protected. */
+
+var callHostHints = rpc.declare({ object: 'luci-rpc', method: 'getHostHints', expect: { '': {} } });
+function hostHints() { return L.resolveDefault(callHostHints(), {}); }
 
 function icon(name, size) {
 	var span = E('span', { 'class': 'btn-ico', 'aria-hidden': 'true' });
@@ -41,6 +45,37 @@ function pill(text, kind) {
 
 function stat(value, label, extra) {
 	return E('div', { 'class': 'wb-stat' }, [ E('b', {}, [ value == null || value === '' ? '—' : String(value), extra || '' ]), E('span', {}, [ label ]) ]);
+}
+
+function percentRing(label, tone) {
+	var namespace = 'http://www.w3.org/2000/svg';
+	var dial = document.createElementNS(namespace, 'svg');
+	dial.setAttribute('viewBox', '0 0 100 100');
+	dial.setAttribute('aria-hidden', 'true');
+	var track = document.createElementNS(namespace, 'circle');
+	var arc = document.createElementNS(namespace, 'circle');
+	[ track, arc ].forEach(function(circle) {
+		circle.setAttribute('cx', '50');
+		circle.setAttribute('cy', '50');
+		circle.setAttribute('r', '42');
+	});
+	track.setAttribute('class', 'track');
+	arc.setAttribute('class', 'val');
+	arc.setAttribute('pathLength', '100');
+	arc.setAttribute('stroke-dasharray', '100');
+	dial.appendChild(track);
+	dial.appendChild(arc);
+	var number = E('span', { 'class': 'num' });
+	var node = E('div', { 'role': 'img' }, [ dial, number ]);
+	return { node: node, update: function(value) {
+		var known = Number.isFinite(value);
+		var percent = known ? Math.max(0, Math.min(100, Math.round(value))) : 0;
+		node.className = 'wb-score' + (known ? ' ' + tone(percent) : '');
+		number.textContent = known ? percent + '%' : '—';
+		node.setAttribute('aria-label', label + ': ' + (known ? number.textContent : _('Unavailable')));
+		arc.setAttribute('stroke-dashoffset', String(100 - percent));
+		arc.setAttribute('visibility', percent ? 'visible' : 'hidden');
+	} };
 }
 
 function hero(title, sub, row, actions) {
@@ -112,10 +147,9 @@ function toggle(checked, onChange, attrs) {
  * native LuCI uses for connectivity-affecting changes (IPs, Wi-Fi, VLANs).
  * ui.changes.apply() drives its own progress/error banner; a genuine staged
  * save failure (expired session, ACL rejection) surfaces via the toast. */
-function apply(checked, successTitle, successSub) {
+function apply(checked) {
 	return uci.save().then(function() {
-		ui.changes.apply(!!checked);
-		if (successTitle) toast(successTitle, successSub || '', 'good');
+		return ui.changes.apply(!!checked);
 	}, function(err) {
 		var msg = (err && err.message) ? err.message : String(err || _('Unknown error'));
 		toast(_('Could not save changes'), msg, 'bad');
@@ -141,12 +175,19 @@ function confirm(title, message, opts) {
  * return a Promise; a rejection or thrown Error is shown inline. */
 function formModal(title, fields, onSubmit, opts) {
 	opts = opts || {};
-	var err = E('div', { 'class': 'wb-form-error' });
-	var rows = fields.map(function(f) {
+	var err = E('div', { 'class': 'wb-form-error', 'role': 'alert' });
+	var rows = fields.map(function(f, index) {
 		if (f.raw) return f.raw;
+		var id = f.node.id || 'wb-modal-field-' + index;
+		var single = /^(INPUT|SELECT|TEXTAREA)$/i.test(f.node.tagName);
+		var label = single ? E('label', { 'class': 'wb-form-label', 'for': id }, f.label) : E('span', { 'class': 'wb-form-label', 'id': id + '-label' }, f.label);
+		var details = [ f.help, f.desc ].filter(Boolean).join(' ');
+		var attrs = single ? {} : { 'role': 'group', 'aria-labelledby': id + '-label' };
+		if (single) f.node.id = id;
+		if (details && single) f.node.setAttribute('aria-describedby', id + '-desc');
+		if (details && !single) attrs['aria-describedby'] = id + '-desc';
 		return E('div', { 'class': 'wb-form-row' }, [
-			E('label', { 'class': 'wb-form-label', 'for': f.node.id || '' }, [ f.label, f.help ? help(f.help) : '' ]),
-			E('div', {}, [ f.node, f.desc ? E('div', { 'class': 'wb-form-desc' }, [ f.desc ]) : '' ])
+			label, E('div', attrs, [ f.node, details ? E('div', { 'class': 'wb-form-desc', 'id': id + '-desc' }, details) : '' ])
 		]);
 	});
 	var okBtn = E('button', { 'class': 'btn cbi-button-positive' }, [ opts.ok || _('Save') ]);
@@ -154,13 +195,13 @@ function formModal(title, fields, onSubmit, opts) {
 		err.textContent = '';
 		okBtn.disabled = true; okBtn.classList.add('spinning');
 		Promise.resolve().then(function() { return onSubmit(); }).then(function() {
-			ui.hideModal();
+			if (modal.contains(okBtn)) ui.hideModal();
 		}).catch(function(e) {
 			err.textContent = e && e.message ? e.message : String(e || _('Unknown error'));
 			okBtn.disabled = false; okBtn.classList.remove('spinning');
 		});
 	});
-	ui.showModal(title, [
+	var modal = ui.showModal(title, [
 		opts.intro ? E('p', {}, [ opts.intro ]) : '',
 		E('div', {}, rows),
 		err,
@@ -168,7 +209,7 @@ function formModal(title, fields, onSubmit, opts) {
 			E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Cancel') ]), ' ', okBtn
 		])
 	]);
-	var first = document.querySelector('.modal input, .modal select');
+	var first = modal.querySelector('input, select, textarea');
 	if (first) first.focus();
 }
 
@@ -268,9 +309,9 @@ function pkgLink(attrs, children) {
 
 return baseclass.extend({
 	icon: icon, iconLabel: iconLabel, iconButton: iconButton, iconLink: iconLink, help: help,
-	pill: pill, stat: stat, hero: hero, card: card, kv: kv, empty: empty, toast: toast, toggle: toggle,
+	pill: pill, stat: stat, percentRing: percentRing, hero: hero, card: card, kv: kv, empty: empty, toast: toast, toggle: toggle,
 	apply: apply, confirm: confirm, formModal: formModal, input: input, select: select,
 	fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, fmtDuration: fmtDuration,
 	signalQuality: signalQuality, sigBars: sigBars, macKey: macKey, encryptionLabel: encryptionLabel, bandLabel: bandLabel,
-	menuHas: menuHas, pkgLink: pkgLink
+	menuHas: menuHas, pkgLink: pkgLink, hostHints: hostHints
 });

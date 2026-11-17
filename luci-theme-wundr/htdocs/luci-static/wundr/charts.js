@@ -1,6 +1,6 @@
 (function (window) {
 	'use strict';
-	var charts = [];
+	var charts = new WeakMap();
 
 	function tok(name, fallback) {
 		var v = getComputedStyle(document.documentElement).getPropertyValue(name);
@@ -69,7 +69,7 @@
 			}
 		}
 		draw();
-		charts.push({ canvas: canvas, redraw: draw });
+		charts.set(canvas, draw);
 	}
 
 	function area(canvas, data, opts) {
@@ -101,7 +101,7 @@
 			}
 		}
 		draw();
-		charts.push({ canvas: canvas, redraw: draw });
+		charts.set(canvas, draw);
 	}
 
 	function gauge(canvas, pct, opts) {
@@ -124,7 +124,7 @@
 			ctx.fillText(Math.round(pct) + '%', cx, cx + 1);
 		}
 		draw();
-		charts.push({ canvas: canvas, redraw: draw });
+		charts.set(canvas, draw);
 	}
 
 	function liveArea(canvas, getVal, opts) {
@@ -144,8 +144,9 @@
 
 	if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
 		document.addEventListener('wb-theme-change', function () {
-			charts.forEach(function (c) {
-				try { c.redraw(); } catch (e) {}
+			document.querySelectorAll('canvas').forEach(function (canvas) {
+				var draw = charts.get(canvas);
+				if (draw) draw();
 			});
 		});
 	}

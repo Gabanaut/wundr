@@ -1,6 +1,6 @@
 'use strict';
 'require view';
-'require form';
+'require network';
 'require uci';
 'require dom';
 'require ui';
@@ -69,7 +69,7 @@ function lanBridgeName() {
    as unsupported, never as "flat". */
 function lanIsVlanSubinterface() {
 	var name = lanBridgeName();
-	return name != null && /^\w+\.\d+$/.test(name);
+	return name != null && /\.\d+$/.test(name);
 }
 
 function findBridgeSection(bridgeName) {
@@ -152,6 +152,12 @@ function segmentDeviceName(bridgeName, vid) {
 	return (bridgeName || 'br-lan') + '.' + vid;
 }
 
+function managedSegment(sid) {
+	var vid = Number(uci.get('network', sid, 'vlan')), bridge = lanBridgeName();
+	return bridge && Number.isInteger(vid) && vid >= VLAN_MIN && vid <= VLAN_MAX && sid === segmentVlanSectionName(vid) &&
+		uci.get('network', sid, 'device') === bridge && uci.get('network', segmentInterfaceName(vid), 'device') === segmentDeviceName(bridge, vid);
+}
+
 function usedVids() {
 	var used = {};
 	uci.sections('network', 'bridge-vlan', function(s) {
@@ -161,14 +167,8 @@ function usedVids() {
 	return used;
 }
 
-function usedInterfaceNames() {
-	var used = {};
-	uci.sections('network', 'interface', function(s) { used[s['.name']] = true; });
-	return used;
-}
-
 function usedZoneNames() {
-	var used = {};
+	var used = Object.create(null);
 	uci.sections('firewall', 'zone', function(s) {
 		var n = s.name || s['.name'];
 		used[n] = true;
@@ -184,22 +184,23 @@ function nextFreeVid(used) {
 	return null;
 }
 
-function freeThirdOctet() {
-	/* Segments use 192.168.<third>.1/24; avoid the LAN third and collisions. */
-	var lanIp = L.toArray(uci.get('network', 'lan', 'ipaddr'))[0] || '';
-	var lanThird = String(lanIp).split('/')[0].split('.')[2];
-	var used = {};
-	uci.sections('network', 'interface', function(s) {
-		L.toArray(s.ipaddr).forEach(function(ip) {
-			var t = String(ip).split('/')[0].split('.')[2];
-			if (t != null && t !== '') used[t] = true;
+function occupiedSegmentSubnets() {
+	var occupied = new Array(256).fill(null);
+	var base = 0xc0a80000;
+	uci.sections('network', 'interface', function(iface) {
+		L.toArray(iface.ipaddr).forEach(function(raw) {
+			var parts = String(raw).split('/'), bytes = parts[0].split('.');
+			if (bytes.length !== 4 || bytes.some(function(byte) { return !/^\d{1,3}$/.test(byte) || +byte > 255; })) return;
+			var mask = parts[1] || iface.netmask || '32';
+			var prefix = /^\d+$/.test(mask) ? +mask : network.maskToPrefix(mask);
+			if (prefix == null || prefix < 0 || prefix > 32) return;
+			var address = bytes.reduce(function(value, byte) { return value * 256 + Number(byte); }, 0);
+			var size = Math.pow(2, 32 - prefix), start = Math.floor(address / size) * size - base;
+			var last = Math.min(255, Math.floor((start + size - 1) / 256));
+			for (var third = Math.max(0, Math.floor(start / 256)); third <= last; third++) occupied[third] = iface['.name'];
 		});
 	});
-	for (var t = 0; t <= 255; t++) {
-		var s = String(t);
-		if (s !== lanThird && !used[s]) return s;
-	}
-	return null;
+	return occupied;
 }
 
 /* ---- mode detection ---- */
@@ -210,6 +211,7 @@ function detectMode() {
 	if (lanIsVlanSubinterface())
 		return { mode: 'unsupported', bridge: bridgeName, bridgeSection: null };
 	var bridgeSection = findBridgeSection(bridgeName);
+	if (!bridgeSection) return { mode: 'unsupported', bridge: bridgeName, bridgeSection: null };
 	var vlans = bridgeName ? bridgeVlanSections(bridgeName) : [];
 	var filtering = bridgeSection && uci.get('network', bridgeSection, 'vlan_filtering') === '1';
 	if (vlans.length || filtering)
@@ -233,33 +235,38 @@ function createSegment(vid, name, subnet, dhcp, bridgeName) {
 	uci.set('network', ifSid, 'ipaddr', '192.168.' + subnet + '.1');
 	uci.set('network', ifSid, 'netmask', '255.255.255.0');
 
-	/* 3. firewall zone: forward to lan allowed (internet access), input
-	   from the segment accepted (reach the router UI/DNS). */
+	var hasWan = !!usedZoneNames().wan;
 	var zoneSid = uci.add('firewall', 'zone');
 	uci.set('firewall', zoneSid, 'name', name);
-	uci.set('firewall', zoneSid, 'network', segmentInterfaceName(vid));
-	uci.set('firewall', zoneSid, 'input', 'ACCEPT');
+	uci.set('firewall', zoneSid, 'network', [ ifSid ]);
+	uci.set('firewall', zoneSid, 'input', 'REJECT');
 	uci.set('firewall', zoneSid, 'output', 'ACCEPT');
 	uci.set('firewall', zoneSid, 'forward', 'REJECT');
 
-	var fwdSid = uci.add('firewall', 'forwarding');
-	uci.set('firewall', fwdSid, 'src', name);
-	uci.set('firewall', fwdSid, 'dest', 'lan');
-
-	/* 4. DHCP pool on the new interface. Always keyed by the interface
-	   name so removeSegment can find it; 'ignore' mode still creates the
-	   section (with ignore=1) so the UI shows the pool as disabled. */
-	if (dhcp) {
-		var dhcpSid = uci.add('dhcp', 'dhcp', segmentInterfaceName(vid));
-		if (dhcp === 'ignore')
-			uci.set('dhcp', dhcpSid, 'ignore', '1');
-		else if (dhcp === 'dhcp') {
-			uci.set('dhcp', dhcpSid, 'start', '100');
-			uci.set('dhcp', dhcpSid, 'limit', '150');
-			uci.set('dhcp', dhcpSid, 'leasetime', '12h');
-		}
-		/* 'static' → section exists with no pool options; dnsmasq serves
-		   nothing, static clients configure themselves. */
+	if (hasWan) {
+		var fwdSid = uci.add('firewall', 'forwarding');
+		uci.set('firewall', fwdSid, 'src', name);
+		uci.set('firewall', fwdSid, 'dest', 'wan');
+	}
+	function allowRouterService(service, protocols, port) {
+		var rule = uci.add('firewall', 'rule');
+		uci.set('firewall', rule, 'name', 'Allow-' + service + '-' + ifSid);
+		uci.set('firewall', rule, 'src', name);
+		uci.set('firewall', rule, 'family', 'ipv4');
+		uci.set('firewall', rule, 'proto', protocols);
+		uci.set('firewall', rule, 'dest_port', port);
+		uci.set('firewall', rule, 'target', 'ACCEPT');
+	}
+	allowRouterService('DNS', [ 'tcp', 'udp' ], '53');
+	var dhcpSid = uci.add('dhcp', 'dhcp', ifSid);
+	uci.set('dhcp', dhcpSid, 'interface', ifSid);
+	if (dhcp === 'dhcp') {
+		allowRouterService('DHCP', [ 'udp' ], '67');
+		uci.set('dhcp', dhcpSid, 'start', '100');
+		uci.set('dhcp', dhcpSid, 'limit', '150');
+		uci.set('dhcp', dhcpSid, 'leasetime', '12h');
+	} else {
+		uci.set('dhcp', dhcpSid, 'ignore', '1');
 	}
 }
 
@@ -276,9 +283,15 @@ function removeSegment(vid) {
 	});
 	zoneSids.forEach(function(sid) {
 		var zoneName = uci.get('firewall', sid, 'name');
-		uci.sections('firewall', 'forwarding', function(f) {
-			if (f.src === zoneName || f.dest === zoneName)
-				uci.remove('firewall', f['.name']);
+		var kept = L.toArray(uci.get('firewall', sid, 'network')).filter(function(net) { return net !== ifName; });
+		if (kept.length || zoneName === 'lan' || zoneName === 'wan' || uci.get('firewall', sid, 'device') || uci.get('firewall', sid, 'subnet')) {
+			if (kept.length) uci.set('firewall', sid, 'network', kept);
+			else uci.unset('firewall', sid, 'network');
+			return;
+		}
+		uci.sections('firewall').forEach(function(section) {
+			if ([ 'forwarding', 'rule', 'redirect' ].indexOf(section['.type']) >= 0 && (section.src === zoneName || section.dest === zoneName))
+				uci.remove('firewall', section['.name']);
 		});
 		uci.remove('firewall', sid);
 	});
@@ -291,8 +304,10 @@ function removeSegment(vid) {
 		var kept = nets.filter(function(n) { return n !== ifName; });
 		if (kept.length)
 			uci.set('wireless', s['.name'], 'network', kept.join(' '));
-		else
-			uci.set('wireless', s['.name'], 'network', 'lan');
+		else {
+			uci.set('wireless', s['.name'], 'disabled', '1');
+			uci.unset('wireless', s['.name'], 'network');
+		}
 	});
 
 	uci.remove('network', ifName);
@@ -317,7 +332,7 @@ return view.extend({
 		var bridgeName = state.bridge;
 		var bridgeSection = state.bridgeSection;
 		var isVlan = state.mode === 'vlan';
-		var isUnsupported = state.mode === 'unsupported';
+		var isUnsupported = !bridgeSection;
 
 		/* ---------- unsupported topology (LAN on a VLAN subinterface) ---------- */
 		if (isUnsupported) {
@@ -325,7 +340,7 @@ return view.extend({
 				E('section', { 'class': 'wb-card wb-hero' }, [
 					E('h2', { 'class': 'wb-h' }, _('Network topology')),
 					E('div', { 'class': 'wb-sub' },
-						_('The LAN interface is attached to a VLAN sub-interface (%s). This setup is already segmented at the bridge level in a way this editor does not model. Use the native LuCI network editor to manage it.').format(bridgeName)),
+						_('The LAN does not use a plain managed bridge. Use the native network editor for this topology.')),
 					E('div', { 'style': 'margin-top:12px' }, [
 						E('a', { 'class': 'wb-btn primary', 'href': L.url('admin/network/network') }, _('Open native LuCI network editor'))
 					])
@@ -333,10 +348,7 @@ return view.extend({
 			]);
 		}
 
-		/* Physical ports of the bridge (fallback: common DSA names). */
-		var ports = bridgeSection
-			? bridgePorts(bridgeSection, bridgeName)
-			: [ 'lan1', 'lan2', 'lan3', 'lan4', 'lan5' ];
+		var ports = bridgePorts(bridgeSection, bridgeName);
 
 		/* ---------- mode card ---------- */
 		var modeCard = E('section', { 'class': 'wb-card wb-hero' }, [
@@ -368,18 +380,9 @@ return view.extend({
 					: _('All ports and Wi-Fi networks share one LAN. Enabling segmentation adds VLAN filtering to the bridge and lets you create isolated segments below.')),
 			E('div', { 'style': 'margin-top:12px' }, [
 				E('button', {
-					'class': 'wb-btn' + (isVlan ? '' : ' primary'),
+					'class': 'wb-btn primary', 'type': 'button',
 					'click': ui.createHandlerFn(self, function() {
-						if (isVlan) return;
-						self.enableVlanMode(bridgeSection);
-					})
-				}, [ isVlan ? _('Segmentation active') : _('Use a flat network') ]),
-				' ',
-				E('button', {
-					'class': 'wb-btn' + (isVlan ? ' primary' : ''),
-					'click': ui.createHandlerFn(self, function() {
-						if (!isVlan) return;
-						self.disableVlanMode(bridgeSection);
+						return isVlan ? self.disableVlanMode(bridgeSection) : self.enableVlanMode(bridgeSection);
 					})
 				}, [ isVlan ? _('Return to flat network') : _('Segment the network (VLANs)') ])
 			])
@@ -406,7 +409,7 @@ return view.extend({
 
 			var rows = vlans.map(function(v) {
 				var vid = +v.vlan;
-				var managed = /^wundr_vlan\d+$/.test(v['.name']);
+				var managed = managedSegment(v['.name']);
 				var specByPort = {};
 				vlanPorts(v['.name']).forEach(function(spec) {
 					var parsed = parsePortSpec(spec);
@@ -438,11 +441,16 @@ return view.extend({
 					var tagged = parsed && parsed.tagged;
 					var untagged = parsed && parsed.untagged;
 					var pvid = parsed && parsed.pvid;
+					if (!managed) {
+						cells.push(E('td', { 'class': 'wb-sub' }, parsed ? (tagged ? 'T' : 'U') + (pvid ? ' PVID' : '') : '—'));
+						return;
+					}
 					cells.push(E('td', {}, [
 						E('button', {
 							'class': 'wb-btn' + (tagged ? ' primary' : ''),
 							'style': 'padding:2px 8px;font-size:11px',
 							'title': _('Toggle tagged (trunk)'),
+							'aria-label': _('Tagged: %s, VLAN %d').format(p, vid), 'aria-pressed': String(!!tagged),
 							'click': ui.createHandlerFn(self, function() {
 								self.togglePort(v['.name'], p, 'tagged', tagged);
 							})
@@ -452,6 +460,7 @@ return view.extend({
 							'class': 'wb-btn' + (untagged ? ' primary' : ''),
 							'style': 'padding:2px 8px;font-size:11px',
 							'title': _('Toggle untagged (access). One untagged VLAN per port.'),
+							'aria-label': _('Untagged: %s, VLAN %d').format(p, vid), 'aria-pressed': String(!!untagged),
 							'click': ui.createHandlerFn(self, function() {
 								self.togglePort(v['.name'], p, 'untagged', untagged);
 							})
@@ -462,7 +471,7 @@ return view.extend({
 
 				cells.push(E('td', { 'class': 'mono' }, segmentDeviceName(bridgeName, vid)));
 				cells.push(E('td', {}, [
-					(/^wundr_vlan\d+$/.test(v['.name'])
+					(managed
 						? E('button', {
 								'class': 'wb-btn',
 								'style': 'padding:2px 8px;font-size:11px',
@@ -559,13 +568,17 @@ return view.extend({
 		var self = this;
 		var bridgeName = lanBridgeName();
 		var vlans = bridgeVlanSections(bridgeName);
-		var managed = vlans.filter(function(sid) {
-			return /^wundr_vlan\d+$/.test(sid);
-		});
+		var managed = vlans.filter(managedSegment);
+		if (managed.length !== vlans.length) {
+			return ui.showModal(_('Other VLANs use this bridge'), [
+				E('p', {}, _('Disabling filtering would also affect VLANs configured outside Wundr. Review them in the native network editor.')),
+				E('div', { 'class': 'right' }, [ E('a', { 'class': 'btn', 'href': L.url('admin/network/network') }, _('Open network editor')), ' ', E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ])
+			]);
+		}
 
 		ui.showModal(_('Return to flat network'), [
 			E('p', {}, _('This removes %d segment(s) and their firewall zones, DHCP pools and Wi-Fi bindings, then disables VLAN filtering on %s. Devices connected through a segment will lose connectivity until they reconnect to the main network.').format(managed.length, bridgeName)),
-			E('p', {}, _('Third-party VLAN sections (not created by Wundr) are kept but will no longer take effect once filtering is off.')),
+			E('p', {}, _('Wi-Fi networks attached only to a removed segment will be disabled, not moved onto the main LAN.')),
 			E('div', { 'class': 'button-row' }, [
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
 				E('button', {
@@ -588,24 +601,24 @@ return view.extend({
 	addSegmentFlow: function() {
 		var self = this;
 		var used = usedVids();
-		var ifNames = usedInterfaceNames();
 		var zones = usedZoneNames();
 		var vid = nextFreeVid(used);
-		var third = freeThirdOctet();
+		var occupied = occupiedSegmentSubnets(), third = occupied.indexOf(null);
 
 		var vidInput = E('input', { 'class': 'wb-input', 'type': 'number', 'min': String(VLAN_MIN), 'max': String(VLAN_MAX), 'value': vid != null ? String(vid) : '' });
 		var nameInput = E('input', { 'class': 'wb-input', 'type': 'text', 'value': '', 'placeholder': _('e.g. Guest, IoT, Cameras') });
-		var thirdInput = E('input', { 'class': 'wb-input', 'type': 'text', 'value': third || '', 'placeholder': 'e.g. 20' });
+		var thirdInput = E('input', { 'class': 'wb-input', 'type': 'text', 'value': third >= 0 ? String(third) : '', 'placeholder': 'e.g. 20' });
 		var dhcpSelect = E('select', { 'class': 'wb-input' }, [
 			E('option', { 'value': 'dhcp' }, _('DHCP server on this segment')),
-			E('option', { 'value': 'static' }, _('No DHCP (static clients only)')),
-			E('option', { 'value': 'ignore' }, _('DHCP relay / external server'))
+			E('option', { 'value': 'static' }, _('No local DHCP server'))
 		]);
 
-		function row(label, input, help) {
+		function row(id, label, input, help) {
+			input.id = 'wb-segment-' + id;
+			if (help) input.setAttribute('aria-describedby', input.id + '-help');
 			return E('div', { 'class': 'wb-form-row' }, [
-				E('span', { 'class': 'wb-form-label' }, [ label, help ? E('div', { 'class': 'wb-help' }, help) : E([]) ]),
-				input
+				E('label', { 'class': 'wb-form-label', 'for': input.id }, label),
+				E('div', {}, [ input, help ? E('div', { 'class': 'wb-form-desc', 'id': input.id + '-help' }, help) : '' ])
 			]);
 		}
 
@@ -618,23 +631,23 @@ return view.extend({
 				return _('VLAN ID %d is already in use.').format(+v);
 			if (!/^[A-Za-z0-9_]{1,11}$/.test(nm))
 				return _('Name must be 1–11 letters, digits or underscores (firewall zone limit).');
-			if (zones[nm])
+			if (zones[nm] || nm === 'wan' || nm === 'lan')
 				return _('A firewall zone with that name already exists.');
-			if (ifNames[segmentInterfaceName(+v)])
-				return _('Interface %s already exists.').format(segmentInterfaceName(+v));
+			if (uci.get('dhcp', segmentInterfaceName(+v)) || uci.get('network', segmentVlanSectionName(+v)) || uci.get('network', segmentInterfaceName(+v)))
+				return _('A configuration section for this VLAN already exists. Choose a different VLAN ID.');
 			if (!/^\d{1,3}$/.test(t) || +t > 255)
 				return _('Third octet must be 0–255.');
-			if (t === String(L.toArray(uci.get('network', 'lan', 'ipaddr'))[0] || '').split('/')[0].split('.')[2])
-				return _('That octet is used by the main LAN subnet.');
+			if (occupied[+t])
+				return _('192.168.%d.0/24 overlaps the configured address range of %s.').format(+t, occupied[+t]);
 			return null;
 		}
 
 		ui.showModal(_('Add network segment'), [
-			E('p', { 'class': 'wb-sub' }, _('Creates the bridge VLAN, logical interface, firewall zone and DHCP pool in one staged batch. Nothing is applied until you confirm the standard apply dialog.')),
-			row(_('VLAN ID (1–4094)'), vidInput, _('The 802.1Q tag carried on trunk links.')),
-			row(_('Segment name'), nameInput, _('Used as the firewall zone name.')),
-			row(_('Subnet third octet'), thirdInput, _('The segment uses 192.168.<this>.0/24 with the router at .1.')),
-			row(_('Address assignment'), dhcpSelect, null),
+			E('p', { 'class': 'wb-sub' }, zones.wan ? _('Adds forwarding to WAN only. Router administration is not enabled for this segment.') : _('No wan firewall zone is configured. This segment will have no outbound forwarding.')),
+			row('vid', _('VLAN ID (1–4094)'), vidInput, _('The 802.1Q tag carried on trunk links.')),
+			row('name', _('Segment name'), nameInput, _('Used as the firewall zone name.')),
+			row('subnet', _('Subnet third octet'), thirdInput, _('The segment uses 192.168.<this>.0/24 with the router at .1.')),
+			row('dhcp', _('Address assignment'), dhcpSelect, null),
 			errBox,
 			E('div', { 'class': 'button-row', 'style': 'margin-top:14px' }, [
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
@@ -648,7 +661,7 @@ return view.extend({
 							errBox.style.display = 'block';
 							return;
 						}
-						createSegment(+v, nm, t, dhcpSelect.value, lanBridgeName());
+						createSegment(+v, nm, +t, dhcpSelect.value, lanBridgeName());
 						ui.hideModal();
 						return self.applyStaged();
 					})
@@ -660,7 +673,7 @@ return view.extend({
 	removeSegmentFlow: function(vid) {
 		var self = this;
 		ui.showModal(_('Remove segment %d').format(vid), [
-			E('p', {}, _('Removes the bridge VLAN, interface, firewall zone, forwardings and DHCP pool for VLAN %d. Clients on this segment lose connectivity.').format(vid)),
+			E('p', {}, _('Removes VLAN %d, its dedicated firewall zone and rules, and its DHCP pool. Wi-Fi networks attached only to this segment will be disabled.').format(vid)),
 			E('div', { 'class': 'button-row' }, [
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
 				E('button', {
@@ -688,6 +701,10 @@ return view.extend({
 			var owner = this.untaggedOwner(bridgeName, port);
 			if (owner != null && owner !== vlanSid) {
 				var ownerVid = uci.get('network', owner, 'vlan');
+				if (!managedSegment(owner)) return ui.showModal(_('Port belongs to a native VLAN'), [
+					E('p', {}, _('Port %s is untagged on VLAN %s. Change its assignment in the native network editor.').format(port, ownerVid)),
+					E('div', { 'class': 'right' }, [ E('a', { 'class': 'btn', 'href': L.url('admin/network/network') }, _('Open network editor')), ' ', E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ])
+				]);
 				ui.showModal(_('Port already assigned'), [
 					E('p', {}, _('Port %s is already untagged on VLAN %s. A port can only be untagged on one VLAN — that VLAN becomes the port\'s native network. Move it?').format(port, ownerVid)),
 					E('div', { 'class': 'button-row' }, [
@@ -807,7 +824,8 @@ return view.extend({
 		/* Forwardings reference zones BY NAME — rename them too, or the
 		   segment silently loses its internet access. */
 		uci.set('firewall', zoneSid, 'name', newName);
-		uci.sections('firewall', 'forwarding', function(f) {
+		uci.sections('firewall').forEach(function(f) {
+			if ([ 'forwarding', 'rule', 'redirect' ].indexOf(f['.type']) < 0) return;
 			if (f.src === oldName)
 				uci.set('firewall', f['.name'], 'src', newName);
 			if (f.dest === oldName)

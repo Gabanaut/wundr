@@ -30,19 +30,30 @@ function networkLabel(net) {
 	return m ? _('VLAN') + ' ' + m[1] + ' (' + first + ')' : first;
 }
 
-function attachOptions() {
-	var opts = [ [ 'lan', _('Main LAN (full access)') ] ];
+function attachOptions(guest) {
+	var opts = [];
+	var zones = guest ? uci.sections('firewall', 'zone') : [];
+	var forwards = guest ? uci.sections('firewall', 'forwarding') : [];
+	var lanDevice = uci.get('network', 'lan', 'device');
 	uci.sections('network', 'interface', function(ifc) {
 		var id = ifc['.name'];
-		if (id === 'lan' || id === 'loopback' || /^wan/.test(id) || ifc.proto === 'none') return;
-		opts.push([ id, networkLabel(id) ]);
+		if (id === 'loopback' || /^wan/.test(id) || ifc.proto === 'none') return;
+		if (guest) {
+			if (id === 'lan' || ifc.proto !== 'static' || (lanDevice && ifc.device === lanDevice)) return;
+			var members = zones.filter(function(zone) { return L.toArray(zone.network).indexOf(id) >= 0; });
+			var zone = members[0];
+			if (members.length !== 1 || !zone.name || /^(lan|wan)$/.test(zone.name) || L.toArray(zone.network).includes('lan')) return;
+			if (!/^(REJECT|DROP)$/i.test(zone.input) || !/^(REJECT|DROP)$/i.test(zone.forward)) return;
+			if (forwards.some(function(rule) { return (rule.src === zone.name || rule.src === '*') && rule.dest !== 'wan' && !/^(0|off|no|false)$/i.test(rule.enabled); })) return;
+		}
+		opts.push([ id, id === 'lan' ? _('Main LAN (full access)') : networkLabel(id) ]);
 	});
 	return opts;
 }
 
 return view.extend({
 	load: function() {
-		return Promise.all([ uci.load('wireless'), uci.load('network'), loadLive() ]);
+		return Promise.all([ uci.load('wireless'), uci.load('network'), loadLive(), L.resolveDefault(uci.load('firewall'), null) ]);
 	},
 
 	render: function(data) {
@@ -51,7 +62,7 @@ return view.extend({
 		var radiosBody = E('div');
 
 		function groups() {
-			var map = {}, order = [];
+			var map = Object.create(null), order = [];
 			uci.sections('wireless', 'wifi-iface', function(s) {
 				if ((s.mode || 'ap') !== 'ap') return;
 				var key = s.ssid || s['.name'];
@@ -87,7 +98,7 @@ return view.extend({
 					E('div', { 'class': 'grow' }, [ E('h3', {}, [ g.ssid ]), E('div', { 'class': 'wb-sub' }, [ facts.join(' · ') ]) ]),
 					wb.toggle(anyOn, function(next) {
 						g.ifaces.forEach(function(s) { if (next) uci.unset('wireless', s['.name'], 'disabled'); else uci.set('wireless', s['.name'], 'disabled', '1'); });
-						return wb.apply(true, next ? _('Wi-Fi network enabled') : _('Wi-Fi network disabled'), g.ssid);
+						return wb.apply(true);
 					}, { 'aria-label': _('Enable network') + ' ' + g.ssid })
 				]),
 				E('div', { 'class': 'wb-radio-row' }, bands),
@@ -101,7 +112,7 @@ return view.extend({
 						wb.confirm(_('Delete “%s”?').format(g.ssid), _('Devices using this network will be disconnected. The change can be rolled back if you lose access.'), { ok: _('Delete'), danger: true }).then(function(yes) {
 							if (!yes) return;
 							g.ifaces.forEach(function(s) { uci.remove('wireless', s['.name']); });
-							return wb.apply(true, _('Network deleted'), g.ssid).then(rerender);
+							return wb.apply(true).then(rerender);
 						});
 					} })
 				])
@@ -125,10 +136,18 @@ return view.extend({
 		function addNetwork(preset) {
 			var radios = live.radios;
 			if (!radios.length) { wb.toast(_('No Wi-Fi radios found'), _('This router reports no wireless hardware.'), 'warn'); return; }
+			var guest = preset === 'guest', options = attachOptions(guest);
+			if (guest && !options.length) {
+				ui.showModal(_('Guest network needs a separate segment'), [
+					E('p', {}, _('No eligible guest segment was found. Create a segment with restricted input and forwarding, then return to Wi-Fi.')),
+					E('div', { 'class': 'right' }, [ E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')), ' ', E('a', { 'class': 'wb-btn primary', 'href': L.url('wundr/network/mode') }, _('Set up a segment')) ])
+				]);
+				return;
+			}
 			var ssid = wb.input({ 'id': 'wb-new-ssid', 'maxlength': '32', 'placeholder': preset === 'guest' ? _('Guest') : _('My Wi-Fi'), 'value': preset === 'guest' ? _('Guest') : '' });
 			var enc = wb.select([ [ 'sae-mixed', _('WPA2 / WPA3 (recommended)') ], [ 'sae', _('WPA3 only') ], [ 'psk2', _('WPA2 only (older devices)') ], [ 'none', _('Open — no password') ] ], 'sae-mixed', { 'id': 'wb-new-enc' });
 			var key = wb.input({ 'id': 'wb-new-key', 'type': 'password', 'minlength': '8', 'maxlength': '63', 'autocomplete': 'new-password' });
-			var attach = wb.select(attachOptions(), preset === 'guest' && attachOptions().length > 1 ? attachOptions()[1][0] : 'lan', { 'id': 'wb-new-net' });
+			var attach = wb.select(guest ? [ [ '', _('Choose a segment') ] ].concat(options) : options, guest ? '' : 'lan', { 'id': 'wb-new-net' });
 			var isolate = E('input', { 'type': 'checkbox', 'id': 'wb-new-isolate' });
 			if (preset === 'guest') isolate.checked = true;
 			var hidden = E('input', { 'type': 'checkbox', 'id': 'wb-new-hidden' });
@@ -143,15 +162,16 @@ return view.extend({
 				{ label: _('Network name'), node: ssid, help: _('The name people see when they look for Wi-Fi (SSID).') },
 				{ label: _('Security'), node: enc },
 				{ label: _('Password'), node: key, desc: _('8–63 characters.') },
-				{ label: _('Access'), node: attach, help: _('Main LAN reaches everything. A VLAN segment keeps guests away from your private devices — create segments under Network › Flat / VLAN Mode.') },
+				{ label: _('Access'), node: attach, desc: guest ? _('Only segments with restricted firewall defaults are listed. Individual firewall rules can grant additional access.') : _('The selected network determines which firewall rules apply.') },
 				{ label: _('Bands'), node: E('div', { 'class': 'wb-checklist' }, radioBoxes) },
 				{ label: _('Options'), node: E('div', { 'style': 'display:grid;gap:6px' }, [
-					E('label', {}, [ isolate, ' ', _('Client isolation — devices on this network cannot see each other') ]),
+					E('label', {}, [ isolate, ' ', _('Isolate clients on the same access point') ]),
 					E('label', {}, [ hidden, ' ', _('Hide network name') ])
 				]) }
 			], function() {
 				var name = ssid.value.trim();
 				if (!name) throw new Error(_('Please enter a network name.'));
+				if (!attachOptions(guest).some(function(option) { return option[0] === attach.value; })) throw new Error(_('Choose an available network segment.'));
 				if (enc.value !== 'none' && key.value.length < 8) throw new Error(_('The password needs at least 8 characters.'));
 				var chosen = radioBoxes.map(function(l) { return l.querySelector('input'); }).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
 				if (!chosen.length) throw new Error(_('Select at least one band.'));
@@ -167,7 +187,7 @@ return view.extend({
 					if (hidden.checked) uci.set('wireless', sid, 'hidden', '1');
 					uci.unset('wireless', radio, 'disabled');
 				});
-				return wb.apply(true, _('Wi-Fi network created'), name).then(rerender);
+				return wb.apply(true).then(rerender);
 			}, { ok: _('Create') });
 		}
 
@@ -176,7 +196,7 @@ return view.extend({
 			var nets = live.nets.filter(function(n) { return n.getWifiDeviceName() === name; });
 			var upNet = nets.filter(function(n) { return n.isUp(); })[0];
 			var clients = nets.reduce(function(sum, n) { return sum + ((live.live[n.getName()] || { clients: [] }).clients.length); }, 0);
-			var conf = uci.get_all('wireless', name) || {};
+			var conf = uci.get('wireless', name) || {};
 			var on = !r.isDisabled();
 			return E('div', { 'class': 'wb-radio-card' }, [
 				E('div', { 'class': 'head' }, [
@@ -184,7 +204,7 @@ return view.extend({
 					wb.pill(on ? (r.isUp() ? _('On') : _('Starting')) : _('Off'), on ? (r.isUp() ? 'good' : 'warn') : 'mut'),
 					wb.toggle(on, function(next) {
 						if (next) uci.unset('wireless', name, 'disabled'); else uci.set('wireless', name, 'disabled', '1');
-						return wb.apply(true, next ? _('Radio enabled') : _('Radio disabled'), name);
+						return wb.apply(true);
 					}, { 'aria-label': _('Enable radio') + ' ' + name })
 				]),
 				wb.kv([

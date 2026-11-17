@@ -152,7 +152,7 @@ return view.extend({
 			var going = p.state_paused !== '1';
 			if (going) uci.set('wundr', p['.name'], 'state_paused', '1'); else uci.unset('wundr', p['.name'], 'state_paused');
 			syncFirewall();
-			return wb.apply(false, going ? _('Internet paused') : _('Internet resumed'), p.name || '')
+			return wb.apply(false)
 				.then(reloadUci).then(rerender)
 				.catch(function() {
 					if (going) uci.unset('wundr', p['.name'], 'state_paused'); else uci.set('wundr', p['.name'], 'state_paused', '1');
@@ -165,7 +165,7 @@ return view.extend({
 				if (!yes) return;
 				uci.remove('wundr', p['.name']);
 				syncFirewall();
-				return wb.apply(false, _('Member removed'), p.name || '').then(reloadUci).then(rerender);
+				return wb.apply(false).then(reloadUci).then(rerender);
 			});
 		}
 
@@ -230,7 +230,7 @@ return view.extend({
 				}
 				p.name = name.value.trim(); /* keep status pill honest before rerender */
 				syncFirewall();
-				return wb.apply(false, existing ? _('Member updated') : _('Member added'), name.value.trim()).then(reloadUci).then(rerender);
+				return wb.apply(false).then(reloadUci).then(rerender);
 			}, { intro: existing ? null : _('A member profile groups one person\'s devices — however many they own — so you can pause or schedule them together.'), ok: existing ? _('Save') : _('Add') });
 		}
 

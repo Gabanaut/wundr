@@ -41,16 +41,20 @@
 
 	function findZone(device, zones) {
 		if (!device) return null;
-		var zid = String(device.zone || '').toLowerCase();
+		var explicit = Object.prototype.hasOwnProperty.call(device, 'zone');
+		var zid = String(device.zone || '');
 		var net = String(device.network || device.interface || '').toLowerCase();
+		var fallback = null;
 		for (var i = 0; i < zones.length; i++) {
 			var z = zones[i];
+			if (z.unassigned) { fallback = z; continue; }
+			if (explicit) { if (zid && z.id === zid) return z; continue; }
 			var id = String(z.id || '').toLowerCase();
 			var zn = String(z.network || '').toLowerCase();
 			var tokens = zn ? zn.split(/\s+/) : [];
-			if ((zid && id === zid) || (net && (zn === net || id === net || tokens.indexOf(net) >= 0))) return z;
+			if (net && (zn === net || id === net || tokens.indexOf(net) >= 0)) return z;
 		}
-		return null;
+		return fallback;
 	}
 
 	function zoneHostOf(hostId, devicesById, zones) {
@@ -147,7 +151,7 @@
 		var stressCount = isFinite(reqCount) && reqCount > 0 ? Math.floor(reqCount) : 512;
 		var rawDevices = stress ? stressDevices(zones, stressCount) : (Array.isArray(options.devices) ? options.devices : []);
 
-		var devices = [], devicesById = {};
+		var devices = [], devicesById = Object.create(null);
 		rawDevices.forEach(function (d, idx) {
 			if (!d) return;
 			var id = String(d.id != null ? d.id : (d.mac || ('dev-' + idx)));
@@ -158,7 +162,9 @@
 		});
 
 		if (devices.some(function (d) { return !findZone(d, zones); })) {
-			zones.push({ id: 'unassigned', name: 'Unassigned', cidr: 'No segment', network: '', isolation: true, trust: 'Restricted' });
+			var fallbackId = 'unassigned';
+			while (zones.some(function (zone) { return zone.id === fallbackId; })) fallbackId += '-';
+			zones.push({ id: fallbackId, name: 'Unassigned', network: '', unassigned: true });
 		}
 
 		var nodes = [], nodesById = {};
@@ -167,7 +173,7 @@
 			return nodesById[n.id];
 		}
 
-		var zoneHosts = {};
+		var zoneHosts = Object.create(null);
 		devices.forEach(function (d) {
 			var z = findZone(d, zones) || zones[zones.length - 1];
 			if (!z) return;
@@ -218,7 +224,7 @@
 			if (!ep) return [];
 			if (ep.type === 'private') {
 				var srcId = srcEp && srcEp.type === 'zone' ? srcEp.id : null;
-				return zones.filter(function (z) { return z.id !== srcId && z.id !== 'unassigned'; })
+				return zones.filter(function (z) { return z.id !== srcId && !z.unassigned; })
 					.map(function (z) { return 'zone:' + z.id; })
 					.filter(function (id) { return nodesById[id]; });
 			}
@@ -306,6 +312,7 @@
 
 	function render(container, options) {
 		if (!container) return null;
+		if (container.style) container.style.containerType = 'inline-size';
 		options = options || {};
 		var started = clock();
 		var graph = build(options);
@@ -330,18 +337,6 @@
 			'.map-graph-node-zone .map-graph-circle{fill:var(--wb-accent-soft,rgba(128,128,128,.1));stroke:var(--wb-accent);stroke-width:1.5;vector-effect:non-scaling-stroke;fill-opacity:.72;transition:stroke-width .15s,fill-opacity .15s}' +
 			'.map-graph-node-zone.trusted .map-graph-circle{stroke:var(--wb-good-fill,var(--wb-good));fill:var(--wb-good-soft,rgba(31,157,97,.09))}' +
 			'.map-graph-node-zone.isolated .map-graph-circle{stroke:var(--wb-warn-fill,var(--wb-warn));fill:var(--wb-warn-soft,rgba(217,143,0,.08))}' +
-			'.map-graph-zone-ring{fill:none;stroke:var(--wb-warn-fill,var(--wb-warn));stroke-width:1;stroke-dasharray:4 4;opacity:.55;vector-effect:non-scaling-stroke;pointer-events:none}' +
-			'.map-graph-node-special .map-graph-halo{fill:var(--wb-surface);fill-opacity:.5;stroke:var(--wb-border-strong,var(--wb-border));stroke-width:1;vector-effect:non-scaling-stroke}' +
-			'.map-graph-node-special .map-graph-circle{fill:var(--wb-surface);stroke:var(--wb-accent);stroke-width:1.6;vector-effect:non-scaling-stroke}' +
-			'.map-graph-hub-ico{fill:none;stroke:var(--wb-accent-text,var(--wb-accent));stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}' +
-			'.map-graph-hub-ico .dot-fill{fill:var(--wb-accent-text,var(--wb-accent));stroke:none}' +
-			'.map-graph-node-host .map-graph-circle{fill:var(--wb-good-fill,var(--wb-good));stroke:var(--wb-surface);stroke-width:1.4;transition:fill .14s}' +
-			'.map-graph-node-host.blocked .map-graph-circle{fill:var(--wb-bad-fill,var(--wb-bad))}' +
-			'.map-graph-node-host.stress .map-graph-circle{stroke:none;opacity:.65}' +
-			'.map-graph-node-host:hover .map-graph-circle,.map-graph-node-host:focus .map-graph-circle,.map-graph-node-host.selected .map-graph-circle{fill:var(--wb-text);stroke:var(--wb-accent);stroke-width:2}' +
-			'.map-graph-zone-label,.map-graph-special-label,.map-graph-zone-meta{font-family:var(--wb-font);fill:var(--wb-text);pointer-events:none;paint-order:stroke fill;stroke:var(--wb-bg}' +
-			'.map-graph-node-zone.trusted .map-graph-circle{stroke:var(--wb-good-fill,var(--wb-good));fill:var(--wb-good-soft,rgba(31,157,97,.09))}' +
-			'.map-graph-node-zone.isolated .map-graph-circle{stroke:var(--wb-warn-fill,var(--wb-warn));fill:var(--wb-warn-soft,rgba(217,143,0,.08))}' +
 			'.map-graph-zone-ring{fill:none;stroke:var(--wb-warn-fill,var(--wb-warn));stroke-dasharray:4 4;opacity:.55;vector-effect:non-scaling-stroke;pointer-events:none}' +
 			'.map-graph-node-special .map-graph-halo{fill:var(--wb-surface);fill-opacity:.5;stroke:var(--wb-border-strong,var(--wb-border));vector-effect:non-scaling-stroke}' +
 			'.map-graph-node-special .map-graph-circle{fill:var(--wb-surface);stroke:var(--wb-accent);stroke-width:1.6;vector-effect:non-scaling-stroke}' +
@@ -352,9 +347,12 @@
 			'.map-graph-node-host.stress .map-graph-circle{stroke:none;opacity:.65}' +
 			'.map-graph-node-host:hover .map-graph-circle,.map-graph-node-host:focus .map-graph-circle,.map-graph-node-host.selected .map-graph-circle{fill:var(--wb-text);stroke:var(--wb-accent);stroke-width:2}' +
 			'.map-graph-zone-label,.map-graph-special-label,.map-graph-zone-meta{font-family:var(--wb-font);fill:var(--wb-text);pointer-events:none;paint-order:stroke fill;stroke:var(--wb-bg);stroke-width:4px;stroke-linejoin:round}' +
-			'.map-graph-zone-label{font-size:13px;font-weight:700}' +
-			'.map-graph-zone-meta{font-family:var(--wb-mono,monospace);font-size:10.5px;fill:var(--wb-text-soft)}' +
-			'.map-graph-special-label{font-size:11.5px;font-weight:700}' +
+			'.map-graph-zone-label,.map-graph-special-label{font-size:15px;font-weight:700}' +
+			'.map-graph-zone-meta{font-family:var(--wb-mono,monospace);font-size:13px;fill:var(--wb-text-soft)}' +
+			'@container (max-width:900px){.map-graph-zone-label,.map-graph-special-label{font-size:22px}.map-graph-zone-meta{font-size:16px}}' +
+			'@container (max-width:600px){.map-graph-zone-label,.map-graph-special-label{font-size:32px}.map-graph-zone-meta{display:none}}' +
+			'@container (max-width:390px){.map-graph-zone-label,.map-graph-special-label{font-size:46px}}' +
+			'@container (max-width:265px){.map-graph-zone-label,.map-graph-special-label{font-size:54px}}' +
 			'.map-graph-empty{font-family:var(--wb-font);font-size:14px;fill:var(--wb-text-soft)}' +
 			'.map-graph-svg.has-focus .map-graph-edge{opacity:.14}' +
 			'.map-graph-svg.has-focus .map-graph-edge.is-hot{opacity:1}' +
@@ -601,7 +599,7 @@
 			var zid = 'zone:' + z.id;
 			var rows = [
 				'<strong>' + esc(z.name || z.id) + '</strong>',
-				'<div class="muted">' + esc(z.cidr || 'No subnet') + (z.trust ? ' · ' + esc(z.trust) : '') + '</div>'
+				'<div class="muted">' + esc(z.cidr || 'Subnet not reported') + (z.inputPolicy ? ' · Router input: ' + esc(z.inputPolicy) : z.trust ? ' · ' + esc(z.trust) : '') + '</div>'
 			];
 			var segRules = graph.zoneEdges.filter(function (e) { return e.from === zid || e.to === zid; });
 			var intra = graph.intraPolicies[zid] || [];
@@ -612,7 +610,7 @@
 					rows.push('<li>' + (out ? '→ ' : '← ') + esc(endpointName(out ? e.to : e.from)) + ' <span class="tag ' + e.action + '">' + (e.action === 'allow' ? 'allowed' : 'denied') + '</span></li>');
 				});
 				intra.forEach(function (ir) {
-					rows.push('<li>↻ ' + esc(ir.name) + ' <span class="tag ' + ir.action + '">' + (ir.action === 'allow' ? 'intra allow' : 'isolated') + '</span></li>');
+					rows.push('<li>↻ ' + esc(ir.name) + ' <span class="tag ' + ir.action + '">' + (ir.action === 'allow' ? 'intra allow' : 'intra deny') + '</span></li>');
 				});
 				rows.push('</ul>');
 			} else {
@@ -625,7 +623,7 @@
 
 		graph.nodes.forEach(function (item) {
 			var isIso = item.kind === 'zone' && item.zone && item.zone.isolation;
-			var isTrusted = item.kind === 'zone' && item.zone && !item.zone.isolation && String(item.zone.trust || '').toLowerCase() === 'trusted';
+			var isTrusted = item.kind === 'zone' && item.zone && !item.zone.isolation && (item.zone.inputPolicy === 'ACCEPT' || item.zone.trust === 'Trusted');
 			var isBlockedHost = item.kind === 'host' && !!graph.blockedHosts[item.id];
 			var cls = 'map-graph-node map-graph-node-' + item.kind +
 				(isIso ? ' isolated' : (isTrusted ? ' trusted' : '')) +
@@ -647,7 +645,7 @@
 				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r, 'class': 'map-graph-circle' }));
 				drawHubGlyph(g, item.special, item.x, item.y);
 				var lbl = labels[item.special] || item.label;
-				addText(g, item.x, item.y + item.r + 19, lbl, 'map-graph-special-label', { 'text-anchor': 'middle' });
+				addText(g, item.x, item.special === 'internet' ? item.y - item.r - 3 : item.y + item.r + 19, lbl, 'map-graph-special-label', { 'text-anchor': 'middle' });
 				bindInteractive(g, function () {
 					var cnt = graph.zoneEdges.concat(graph.edges).filter(function (e) { return e.from === item.id || e.to === item.id; }).length;
 					return '<strong>' + esc(lbl) + '</strong><div class="muted">' + cnt + ' policy path' + (cnt === 1 ? '' : 's') + '</div>';

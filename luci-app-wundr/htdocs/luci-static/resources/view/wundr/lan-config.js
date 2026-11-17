@@ -4,6 +4,7 @@
 'require uci';
 'require network';
 'require dom';
+'require wundr.ui as wb';
 
 /* Wundr LAN/DHCP — native configuration editor over network + dhcp configs.
  * Handles both OpenWrt 24+/25+ CIDR `list ipaddr` ('192.168.1.1/24') and
@@ -42,12 +43,14 @@ return view.extend({
 		return Promise.all([
 			uci.load('network'),
 			uci.load('dhcp'),
-			L.resolveDefault(network.getHostHints(), {})
+			wb.hostHints()
 		]).then(function(res) {
 			/* Some minimal builds ship without a dhcp.lan section; create it
 			   so the NamedSection editors below have something to bind to. */
-			if (!uci.get('dhcp', 'lan'))
+			if (!uci.get('dhcp', 'lan')) {
 				uci.add('dhcp', 'dhcp', 'lan');
+				uci.set('dhcp', 'lan', 'interface', 'lan');
+			}
 			return res[2] || {};
 		});
 	},

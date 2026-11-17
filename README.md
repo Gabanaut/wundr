@@ -16,7 +16,7 @@ OpenWrt 23.05 · 24.10 · 25.12+ &nbsp;·&nbsp; `opkg` & `apk` &nbsp;·&nbsp; Of
 
 <br>
 
-Wundr puts daily router setup on a clean, mobile-friendly interface while using stock OpenWrt underneath. Every change goes through LuCI's standard UCI validation and 90-second rollback protection, with no external fonts, CDNs, or background services.
+Wundr uses stock LuCI to save router settings. Wi-Fi and VLAN changes use LuCI's checked apply with rollback; quick actions such as pausing a device or adding a port forward apply without that timer. The theme needs no external fonts, CDNs, or background services.
 
 Install both packages for the full interface, or `luci-theme-wundr` alone to skin stock LuCI.
 
@@ -49,7 +49,7 @@ Switch between three built-in looks, Light or Dark mode, and eight WCAG AA color
 
 ## Network Map
 
-Draws live zones, DHCP clients, forwardings, and pause rules straight from `/etc/config/firewall`. Hover a zone or client to highlight its rules, or click a dot to inspect the device.
+Shows configured firewall zones, forwardings, and Wundr pause rules alongside reported IPv4 DHCP leases. A lease is not proof that a device is online, and an arrow is not a traffic measurement. Select a client to see its address and zone.
 
 ![Wundr Network Map](docs/screenshots/network-map.png)
 
@@ -91,6 +91,8 @@ SDK build instructions and uninstall steps are in [docs/PACKAGING.md](docs/PACKA
 <br>
 
 ## Test & License
+
+The screenshots show the shipped views with simulated router data. The local tests do not verify Wi-Fi connectivity, VLAN isolation, or rollback on physical hardware.
 
 ```sh
 sh smoke/qa-static.sh

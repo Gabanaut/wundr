@@ -705,7 +705,6 @@ function createLuciSandbox() {
 			if (!s) return null;
 			return opt == null ? s : (s[opt] !== undefined ? s[opt] : null);
 		},
-		get_all: function (conf, sid) { return sid ? ((uciStore[conf] || {})[sid] || null) : (uciStore[conf] || {}); },
 		set: function (conf, sid, opt, val) {
 			uciStore[conf] = uciStore[conf] || {};
 			if (!uciStore[conf][sid]) return;
@@ -802,7 +801,7 @@ function createLuciSandbox() {
 					getTXPower: function () { return 20; },
 					getCountryCode: function () { return 'US'; },
 					getWifiDeviceName: function () { return c.device; },
-					getWifiDevice: function () { var r = uciStore.wireless[c.device]; return { get: function (k) { return r[k]; } }; },
+					getWifiDevice: function () { return networkMod.getWifiDevices().then(function(radios) { return radios.find(function(radio) { return radio.getName() === c.device; }); }); },
 					get: function (k) { return c[k] || null; },
 					isUp: function () { return c.mode === 'ap'; },
 					isDisabled: function () { return c.disabled === '1'; },
@@ -927,8 +926,8 @@ function createLuciSandbox() {
 	};
 
 	var uiMod = {
-		showModal: function (title, children) { return E('div', { 'class': 'modal' }, [E('h4', {}, [title]), children]); },
-		hideModal: function () {},
+		showModal: function (title, children) { return uiMod.modal = E('div', { 'class': 'modal' }, [E('h4', {}, [title]), children]); },
+		hideModal: function () { uiMod.modal = null; },
 		addTimeLimitedNotification: function () {},
 		createHandlerFn: function (ctx, fn) { return typeof fn === 'function' ? fn.bind(ctx) : ctx[fn].bind(ctx); },
 		changes: { apply: function () { return Promise.resolve(); } },
@@ -951,6 +950,7 @@ function createLuciSandbox() {
 	};
 
 	var rpcMod = {
+		leaseReply: { dhcp_leases: [{ macaddr: 'AA:BB:CC:DD:EE:01', ipaddr: '192.168.1.101', hostname: 'Ava-iPad', interface: 'lan', expires: 3600 }] },
 		declare: function (opts) {
 			return function () {
 				if (opts.object === 'system' && opts.method === 'board')
@@ -958,7 +958,7 @@ function createLuciSandbox() {
 				if (opts.object === 'system' && opts.method === 'info')
 					return Promise.resolve({ uptime: 123456, localtime: 1760000000, load: [16384, 8192, 4096], memory: { total: 1073741824, available: 671088640, free: 536870912 } });
 				if (opts.object === 'luci-rpc' && opts.method === 'getDHCPLeases')
-					return Promise.resolve({ dhcp_leases: [{ macaddr: 'AA:BB:CC:DD:EE:01', ipaddr: '192.168.1.101', hostname: 'Ava-iPad', interface: 'lan', expires: 3600 }] });
+					return Promise.resolve(rpcMod.leaseReply);
 				if (opts.object === 'luci-rpc' && opts.method === 'getHostHints')
 					return Promise.resolve({ 'AA:BB:CC:DD:EE:01': { name: 'Ava-iPad' } });
 				if (opts.object === 'luci' && opts.method === 'getRealtimeStats')
@@ -980,10 +980,10 @@ function createLuciSandbox() {
 		}
 	};
 
-	var pollMod = { add: function () {} };
+	var pollMod = { callbacks: {}, add: function (fn, interval) { pollMod.callbacks[interval] = fn; } };
 	var baseclassMod = { extend: function (p) { return p; } };
 	var viewMod = { extend: function (p) { return Object.assign({ handleSave: function () {}, handleSaveApply: function () {}, handleReset: function () {} }, p); } };
-	var widgetsMod = { NetworkSelect: CBIOption };
+	var widgetsMod = { NetworkSelect: CBIOption, DeviceSelect: CBIOption };
 
 	var storage = {};
 	var win = {
@@ -1064,6 +1064,58 @@ function createLuciSandbox() {
 	return { ctx: ctx, doc: doc, uci: uciMod, CBIMap: CBIMap, loadLuciModule: loadLuciModule };
 }
 
+async function checkSegmentLifecycle() {
+	var env = createLuciSandbox(), settings = env.uci, ui = await env.ctx.L.require('ui');
+	var viewRoot = path.join(APP, 'htdocs', 'luci-static', 'resources', 'view', 'wundr');
+	var mode = env.loadLuciModule(path.join(viewRoot, 'network-mode.js'));
+	var wifi = env.loadLuciModule(path.join(viewRoot, 'wifi.js'));
+	var wifiPage = await wifi.render(await wifi.load());
+	var guest = wifiPage.querySelectorAll('button').find(function (button) { return button.textContent.includes('Guest network'); });
+	function click(button) { button.dispatchEvent({ type: 'click' }); }
+	function submitSegment(vid, name, third, dhcp) {
+		mode.addSegmentFlow();
+		ui.modal.querySelector('#wb-segment-vid').value = vid;
+		ui.modal.querySelector('#wb-segment-name').value = name;
+		ui.modal.querySelector('#wb-segment-subnet').value = third;
+		ui.modal.querySelector('#wb-segment-dhcp').value = dhcp;
+		click(ui.modal.querySelector('.important'));
+	}
+	click(guest);
+	assert(ui.modal.textContent.includes('needs a separate segment') && !ui.modal.querySelector('input'), 'wifi.js: a visitor SSID cannot silently join LAN or a permissive VLAN');
+	ui.hideModal();
+	var secondary = settings.add('network', 'interface', 'secondary');
+	settings.set('network', secondary, 'ipaddr', ['10.0.85.1/24', '192.168.65.129']);
+	settings.set('network', secondary, 'netmask', '255.255.240.0');
+	submitSegment('87', 'visitors', '079', 'dhcp');
+	assert(ui.modal.textContent.includes('overlaps') && !settings.get('network', 'lan87'), 'network-mode.js: manual subnet overlapping a secondary /20 is rejected before staging');
+	submitSegment('87', 'visitors', '085', 'dhcp');
+	var zone = settings.sections('firewall', 'zone').find(function (item) { return item.name === 'visitors'; });
+	assert(!!zone && zone.input === 'REJECT' && zone.forward === 'REJECT' && settings.get('network', 'lan87', 'ipaddr') === '192.168.85.1', 'network-mode.js: new subnet has restricted defaults and canonical IPv4');
+	var forwards = settings.sections('firewall', 'forwarding').filter(function (rule) { return rule.src === 'visitors'; });
+	var services = settings.sections('firewall', 'rule').filter(function (rule) { return rule.src === 'visitors'; });
+	assert(forwards.length === 1 && forwards[0].dest === 'wan' && services.map(function (rule) { return rule.dest_port; }).sort().join(',') === '53,67' && settings.get('dhcp', 'lan87', 'interface') === 'lan87', 'network-mode.js: forwards only to WAN, allows IPv4 DNS/DHCP, and binds the pool');
+	click(guest);
+	var options = ui.modal.querySelector('#wb-new-net').querySelectorAll('option');
+	assert(options.map(function (option) { return option.value; }).join(',') === ',lan87' && options[0].hasAttribute('selected'), 'wifi.js: guest selection is explicit and lists only qualifying segments');
+	ui.hideModal();
+	settings.set('firewall', zone['.name'], 'network', ['lan87', 'othernet']);
+	var only = settings.add('wireless', 'wifi-iface'), shared = settings.add('wireless', 'wifi-iface');
+	settings.set('wireless', only, 'network', 'lan87');
+	settings.set('wireless', shared, 'network', 'lan87 othernet');
+	mode.removeSegmentFlow(87);
+	click(ui.modal.querySelector('.important'));
+	assert(!settings.get('network', 'lan87') && !settings.get('dhcp', 'lan87') && settings.get('firewall', zone['.name'], 'network').join(' ') === 'othernet' && !!settings.get('firewall', forwards[0]['.name']), 'network-mode.js: segment removal preserves a shared zone and its forwarding');
+	assert(settings.get('wireless', only, 'disabled') === '1' && !settings.get('wireless', only, 'network') && settings.get('wireless', shared, 'network') === 'othernet', 'network-mode.js: removal disables a sole SSID and leaves other bindings intact');
+	settings.remove('firewall', 'zone_wan');
+	submitSegment('88', 'localonly', '90', 'static');
+	assert(settings.get('dhcp', 'lan88', 'ignore') === '1' && !settings.sections('firewall', 'forwarding').some(function (rule) { return rule.src === 'localonly'; }) && !settings.sections('firewall', 'rule').some(function (rule) { return rule.src === 'localonly' && rule.dest_port === '67'; }), 'network-mode.js: no WAN and no local DHCP means no outbound forwarding or DHCP allow rule');
+	settings.set('network', 'wundr_vlan10', 'vlan', '11');
+	mode.disableVlanMode('br_lan');
+	assert(ui.modal.textContent.includes('Other VLANs use this bridge') && !ui.modal.querySelector('.important'), 'network-mode.js: mismatched native tag and section identity prevent flattening');
+	settings.set('network', 'lan', 'device', 'br-lan.1');
+	assert(!mode.render().querySelector('button'), 'network-mode.js: a VLAN-backed management interface is read-only');
+}
+
 (async function runRuntimeSuite() {
 	var env = createLuciSandbox();
 
@@ -1103,6 +1155,8 @@ function createLuciSandbox() {
 		var vf = viewFiles[i];
 		var vname = path.basename(vf);
 		env.CBIMap._instances = [];
+		var poll = await env.ctx.L.require('poll');
+		poll.callbacks = {};
 		try {
 			var v = env.loadLuciModule(vf);
 			var state = v.load ? await v.load() : undefined;
@@ -1113,6 +1167,14 @@ function createLuciSandbox() {
 			assert(text.indexOf('NaN') < 0, vname + ': rendered output free of "NaN"');
 
 			/* Behavioral checks on key OpenWrt 24+/25+ views */
+			if (vname === 'qos.js') {
+				var queueOptions = env.CBIMap._instances[0].sections[0].children;
+				var rates = queueOptions.filter(function (option) { return option.option === 'upload' || option.option === 'download'; });
+				assert(rates.length === 2 && rates.every(function (rate) { return rate.datatype === 'uinteger' && rate.rmempty === false; }), 'qos.js: both rates require nonnegative integers, including zero to disable');
+				queueOptions.find(function (option) { return option.option === 'qdisc'; }).write('eth1', 'fq_codel');
+				assert(env.uci.get('sqm', 'eth1', 'qdisc') === 'fq_codel' && !env.uci.get('sqm', 'eth1', 'qd'), 'qos.js: saves the queue discipline under the stock SQM key');
+				assert(!(await v.render({ unavailable: true })).querySelector('.cbi-map'), 'qos.js: no settings form after failed configuration read');
+			}
 			if (vname === 'lan-config.js') {
 				var netMap = env.CBIMap._instances[0], dhcpMap = env.CBIMap._instances[1];
 				var lanSec = netMap.sections[0];
@@ -1137,16 +1199,51 @@ function createLuciSandbox() {
 				assert(JSON.stringify(sysSec.cfgsections()) === '["cfg01e48a"]', 'system.js: binds to anonymous @system[0] (cfg01e48a) on OpenWrt 24+/25+');
 				var ntpOpt = sysSec.children[2];
 				ntpOpt.write('cfg01e48a', '0');
-				
+				assert(env.uci.get('system', 'ntp', 'enabled') === '0', 'system.js: writes NTP state to system.ntp.enabled');
+			}
 			if (vname === 'map.js') {
 				assert(text.indexOf('Zones config') >= 0 && text.indexOf('Rules') >= 0, 'map.js: renders hero action buttons');
-				var devBtns = domNode.querySelectorAll('.map-device');
-				assert(devBtns.length >= 1, 'map.js: renders zone client buttons');
-				if (devBtns[0]) {
-					devBtns[0].dispatchEvent({ type: 'click' });
-					ok('map.js: clicking .map-device opens client inspector modal without throwing');
-				}
-			}assert(env.uci.get('system', 'ntp', 'enabled') === '0', 'system.js: writes NTP state to system.ntp.enabled');
+				var rpc = await env.ctx.L.require('rpc'), ui = await env.ctx.L.require('ui');
+				var originalLeases = rpc.leaseReply;
+				var count = domNode.querySelectorAll('.wb-stat')[1].firstChild;
+				assert(count.textContent === '1' && domNode.querySelectorAll('.map-device').length === 1, 'map.js: initial client count matches list');
+				rpc.leaseReply = { dhcp_leases: [
+					{ macaddr: '02:00:00:00:00:aa', ipaddr: '192.168.1.9', hostname: 'Unknown interface', expires: false },
+					{ macaddr: '02:00:00:00:00:AA', expires: false },
+					{ macaddr: '02:00:00:00:00:BB', interface: 'br-lan', hostname: 'Bridge lease', expires: 120 },
+					{ macaddr: '02:00:00:00:00:CC', interface: 'lan', hostname: 'Expired lease', expires: 0 }
+				] };
+				await poll.callbacks[30]();
+				var clientBtns = domNode.querySelectorAll('.map-device');
+				assert(count.textContent === '2' && clientBtns.length === 2, 'map.js: keeps an infinite lease, deduplicates MACs and excludes expired records');
+				var unknown = clientBtns.find(function (btn) { return btn.textContent.includes('Unknown interface'); });
+				unknown.dispatchEvent({ type: 'click' });
+				assert(ui.modal.textContent.includes('192.168.1.9') && ui.modal.textContent.includes('Unassigned'), 'map.js: inspector uses the refreshed lease without inventing a zone');
+				ui.hideModal();
+				rpc.leaseReply = Promise.reject(new Error('fixture RPC unavailable'));
+				await poll.callbacks[30]();
+				assert(count.textContent === '2' && domNode.textContent.includes('Could not refresh DHCP leases.'), 'map.js: a failed poll retains the last valid snapshot and reports its status');
+				rpc.leaseReply = { dhcp_leases: [] };
+				await poll.callbacks[30]();
+				assert(count.textContent === '0' && !domNode.querySelector('.map-device') && !domNode.textContent.includes('Could not refresh'), 'map.js: a successful empty poll clears the clients and failure state');
+				rpc.leaseReply = originalLeases;
+			}
+			if (vname === 'shield.js') {
+				var savedDefaults = env.uci.sections('firewall', 'defaults')[0];
+				var defaults = savedDefaults && Object.assign({}, savedDefaults);
+				var defaultsId = defaults ? defaults['.name'] : env.uci.add('firewall', 'defaults');
+				env.uci.set('firewall', defaultsId, 'synflood_protect', '1');
+				var permissive = state[2].map(function (zone) {
+					return zone.getName() === 'wan' ? Object.assign({}, zone, { getInput: function () { return 'ACCEPT'; } }) : zone;
+				});
+				var mixed = await v.render([null, null, permissive, {}]);
+				assert(mixed.querySelector('.wb-score').getAttribute('aria-label').includes('50%'), 'shield.js: ACCEPT on WAN and global SYN protection produce one pass out of two');
+				env.uci.unset('firewall', defaultsId, 'synflood_protect');
+				env.uci.unset('firewall', defaultsId, 'syn_flood');
+				var unscored = await v.render([null, null, [], {}]);
+				assert(unscored.querySelector('.wb-score').getAttribute('aria-label').includes('Unavailable'), 'shield.js: missing WAN and SYN settings are not evidence of protection');
+				if (!defaults) env.uci.remove('firewall', defaultsId);
+				else ['synflood_protect', 'syn_flood'].forEach(function (key) { if (defaults[key] != null) env.uci.set('firewall', defaultsId, key, defaults[key]); });
 			}
 			if (vname === 'devices.js') {
 				var ths = domNode.querySelectorAll('th').map(function (t) { return t.textContent; });
@@ -1157,6 +1254,8 @@ function createLuciSandbox() {
 		}
 	}
 
+	try { await checkSegmentLifecycle(); }
+	catch (error) { fail('Segment lifecycle: ' + error.message); }
 	if (failures.length) {
 		console.error('OPENWRT 24+/25+ COMPAT: FAIL (' + failures.length + ' of ' + checks + ' checks failed)');
 		failures.forEach(function (f) { console.error('  - ' + f); });

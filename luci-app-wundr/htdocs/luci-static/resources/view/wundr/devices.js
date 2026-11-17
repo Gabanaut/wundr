@@ -20,7 +20,7 @@ var callLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases', expe
 function collect() {
 	network.flushCache();
 	return Promise.all([
-		network.getHostHints(),
+		wb.hostHints(),
 		L.resolveDefault(callLeases(), {}),
 		network.getWifiNetworks()
 	]).then(function(res) {
@@ -42,26 +42,27 @@ function buildList(data) {
 	var byMac = {};
 	function ensure(mac) {
 		mac = String(mac).toUpperCase();
-		if (!byMac[mac]) byMac[mac] = { mac: mac, name: null, ip: null, online: false, wifi: false, wired: false, signal: null, ssid: null };
+		if (!byMac[mac]) byMac[mac] = { mac: mac, name: null, ip: null, online: false, signal: null, ssid: null };
 		return byMac[mac];
 	}
-	Object.keys(hints).forEach(function(mac) { if (hints[mac] && hints[mac].name) ensure(mac).name = hints[mac].name; });
+	Object.keys(hints).forEach(function(mac) {
+		var hint = hints[mac];
+		if (!hint) return;
+		var host = ensure(mac);
+		host.name = hint.name;
+		host.ip = L.toArray(hint.ipaddrs || hint.ipv4)[0];
+	});
 	leases.forEach(function(l) {
 		if (!l || !l.macaddr) return;
 		var h = ensure(l.macaddr);
 		if (l.hostname && !h.name) h.name = l.hostname;
 		if (l.ipaddr) h.ip = l.ipaddr;
 		h.lease = l;
-		h.expire = l.expires;
 	});
 	Object.keys(stations).forEach(function(mac) {
 		var h = ensure(mac), s = stations[mac];
 		/* assoclist station `signal` is a plain dBm integer (matches native view). */
-		h.online = true; h.wifi = true; h.signal = s.signal; h.ssid = s.ssid || null;
-	});
-	Object.values(byMac).forEach(function(h) {
-		if (!h.wifi) h.wired = true;
-		if (!h.online && h.lease && h.lease.expire > 0) h.online = false; /* leased but not currently seen */
+		h.online = true; h.signal = s.signal; h.ssid = s.ssid || null;
 	});
 	return Object.values(byMac).sort(function(a, b) {
 		if (a.online !== b.online) return a.online ? -1 : 1;
@@ -78,21 +79,20 @@ function findBlock(mac) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([ uci.load('dhcp'), uci.load('firewall'), uci.load('network'), network.getHostHints(), collect() ]);
+		return Promise.all([ uci.load('dhcp'), uci.load('firewall'), collect() ]);
 	},
 
 	render: function(data) {
-		var hintTree = data[3] || {}, live = data[4];
+		var live = data[2];
 		var body = E('div');
-		var searchBox = wb.input({ 'type': 'search', 'placeholder': _('Search name, IP or MAC…') });
-
-		function hintName(mac) { return (hintTree[mac] && hintTree[mac].name) || null; }
+		var searchBox = wb.input({ 'type': 'search', 'placeholder': _('Search name, IP or MAC…'), 'aria-label': _('Filter devices') });
+		var heading = E('h2', { 'class': 'wb-h' }), summary = E('div', { 'class': 'wb-sub' });
 
 		/* Persistent static-lease name overrides live in DHCP host sections. */
 		function leaseName(mac) {
 			var hit = null;
 			uci.sections('dhcp', 'host', function(s) {
-				var m = Array.isArray(s.mac) ? s.mac : [ s.mac ];
+				var m = L.toArray(s.mac);
 				if (!hit && m.filter(Boolean).map(function(x){return x.toUpperCase();}).indexOf(mac.toUpperCase()) >= 0) hit = s['.name'];
 			});
 			return hit;
@@ -101,19 +101,19 @@ return view.extend({
 		function row(dev) {
 			var blocked = !!findBlock(dev.mac);
 			var lsid = leaseName(dev.mac);
-			var conn = dev.wifi ? ('Wi-Fi' + (dev.ssid ? ' · ' + dev.ssid : '')) : (dev.wired ? _('Wired') : '—');
-			var displayName = (lsid && uci.get('dhcp', lsid, 'name')) || hintName(dev.mac) || dev.name || _('Unknown device');
+			var conn = dev.online ? ('Wi-Fi' + (dev.ssid ? ' · ' + dev.ssid : '')) : _('Not reported');
+			var displayName = (lsid && uci.get('dhcp', lsid, 'name')) || dev.name || _('Unknown device');
 			var pinnedIp = lsid ? uci.get('dhcp', lsid, 'ip') : null;
 			return E('tr', { 'data-hay': (String(displayName) + ' ' + (dev.ip || '') + ' ' + dev.mac).toLowerCase() }, [
 				E('td', { 'class': 'name' }, [
 					E('div', { 'class': 'wb-device-name' }, [
-						E('span', { 'class': 'ico' + (dev.online ? ' online' : '') }, [ wb.icon(dev.wifi ? 'wifi' : (dev.wired ? 'port' : 'devices'), 16) ]),
+						E('span', { 'class': 'ico' + (dev.online ? ' online' : '') }, [ wb.icon(dev.online ? 'wifi' : 'devices', 16) ]),
 						E('div', {}, [ E('b', {}, [ displayName ]), E('small', {}, [ dev.mac ]) ])
 					])
 				]),
-				E('td', { 'class': 'mono' }, [ dev.ip || pinnedIp || (dev.online ? '—' : _('offline')) ]),
-				E('td', {}, [ conn, ' ', dev.wifi ? wb.sigBars(dev.signal) : '' ]),
-				E('td', { 'class': 'mono' }, [ dev.online ? wb.pill(_('Online'), 'good') : wb.pill(_('Offline'), 'mut') ]),
+				E('td', { 'class': 'mono' }, [ dev.ip || pinnedIp || '—' ]),
+				E('td', {}, [ conn, ' ', dev.online ? wb.sigBars(dev.signal) : '' ]),
+				E('td', { 'class': 'mono' }, [ dev.online ? wb.pill(_('Online'), 'good') : wb.pill(dev.lease ? _('Lease recorded') : _('Last seen'), 'mut') ]),
 				E('td', { 'class': 'actions' }, [
 					E('button', { 'class': 'wb-btn sm' + (lsid ? ' active' : ''), 'title': lsid ? _('Edit or remove static lease') : _('Set up a static lease'), 'click': function() { addLease(dev, displayName); } }, [ lsid ? _('Static IP') : _('Lease') ]),
 					wb.toggle(!blocked, function(allow) { return setBlock(dev, allow); }, { 'aria-label': _('Allow internet'), 'title': allow_(blocked) })
@@ -140,12 +140,14 @@ return view.extend({
 				{ raw: E('div', { 'class': 'wb-form-desc' }, [ _('Device: ') + dev.mac ]) }
 			];
 			if (rmBox) {
-				fields.push({ label: _('Remove'), node: E('label', { 'style': 'display:inline-flex;align-items:center;gap:6px' }, [ rmBox, _('Delete static lease reservation') ]) });
+				fields.push({ label: _('Remove'), node: E('label', { 'style': 'display:inline-flex;align-items:center;gap:6px' }, [ rmBox, _('Remove this device from the reservation') ]) });
 			}
 			wb.formModal(existing ? _('Edit static lease') : _('Static lease'), fields, function() {
 				if (rmBox && rmBox.checked) {
-					uci.remove('dhcp', existing);
-					return wb.apply(false, _('Static lease removed'), dev.mac)
+					var otherMacs = L.toArray(uci.get('dhcp', existing, 'mac')).filter(function(mac) { return mac.toUpperCase() !== dev.mac; });
+					if (otherMacs.length) uci.set('dhcp', existing, 'mac', otherMacs);
+					else uci.remove('dhcp', existing);
+					return wb.apply(false)
 						.then(function() { return uci.load('dhcp'); }).then(render);
 				}
 				var ipVal = ip.value.trim();
@@ -153,10 +155,10 @@ return view.extend({
 				var host = existing || uci.add('dhcp', 'host');
 				if (name.value.trim()) uci.set('dhcp', host, 'name', name.value.trim());
 				else uci.unset('dhcp', host, 'name');
-				uci.set('dhcp', host, 'mac', [ dev.mac.toUpperCase() ]);
+				if (!existing) uci.set('dhcp', host, 'mac', [ dev.mac ]);
 				if (ipVal) uci.set('dhcp', host, 'ip', ipVal);
 				else uci.unset('dhcp', host, 'ip');
-				return wb.apply(false, existing ? _('Static lease updated') : _('Lease added'), name.value.trim() || dev.mac)
+				return wb.apply(false)
 					.then(function() { return uci.load('dhcp'); }).then(render);
 			}, { ok: existing ? _('Save lease') : _('Add lease') });
 		}
@@ -176,7 +178,7 @@ return view.extend({
 			} else if (existing) {
 				uci.remove('firewall', existing);
 			}
-			return wb.apply(false, allow ? _('Internet allowed') : _('Internet paused'), dev.mac)
+			return wb.apply(false)
 				.then(function() { return collect(); })
 				.then(function(d) { live = d; render(); })
 				.catch(function() { render(); });
@@ -189,14 +191,9 @@ return view.extend({
 				E('tbody', {}, list.length ? list.map(row) : [ E('tr', {}, [ E('td', { 'class': 'wb-empty', 'colspan': '5' }, _('No devices have been seen yet.')) ]) ])
 			]);
 			var online = list.filter(function(d) { return d.online; }).length;
-			dom.content(body, [
-				E('section', { 'class': 'wb-card wb-hero' }, [
-					E('h2', { 'class': 'wb-h' }, [ list.length + ' ' + _('devices') ]),
-					E('div', { 'class': 'wb-sub' }, [ online + ' ' + _('online now') + ' · ' + (list.length - online) + ' ' + _('inactive') ]),
-					E('div', { 'class': 'wb-action-row' }, [ searchBox ])
-				]),
-				wb.card(null, [ E('div', { 'class': 'wb-table-scroll' }, [ table ]) ])
-			]);
+			heading.textContent = list.length + ' ' + _('devices');
+			summary.textContent = _('%d associated with Wi-Fi').format(online);
+			dom.content(body, [ wb.card(null, [ E('div', { 'class': 'wb-table-scroll' }, [ table ]) ]) ]);
 			applyFilter();
 		}
 
@@ -210,7 +207,7 @@ return view.extend({
 
 		render();
 		poll.add(function() { return collect().then(function(d) { live = d; render(); }); }, 5);
-		return body;
+		return E('div', {}, [ E('section', { 'class': 'wb-card wb-hero' }, [ heading, summary, E('div', { 'class': 'wb-action-row' }, [ searchBox ]) ]), body ]);
 	},
 
 	handleSave: null, handleSaveApply: null, handleReset: null

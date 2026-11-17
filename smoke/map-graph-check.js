@@ -7,7 +7,7 @@
  * Verifies:
  *  1. Symmetric 1..6 zone layouts fit strictly inside the 1000x620 viewBox with no overlaps.
  *  2. Duplicate host IDs are deduplicated and multi-interface zone.network tokens resolve.
- *  3. Unassigned devices create a fallback 'unassigned' isolated zone automatically.
+ *  3. Unassigned devices get a neutral group distinct from configured zones.
  *  4. Intra-zone rules (src == dest) populate intraPolicies without self-loop paths.
  *  5. Blocked host rules populate blockedHosts and toggle cleanly via showDenied.
  *  6. 512-node phyllotaxis stress mode packs all hosts inside their parent zone radius.
@@ -81,6 +81,15 @@ ok(multi.zones.some(function (z) { return z.id === 'unassigned'; }), 'creates fa
 ok(Array.isArray(multi.intraPolicies['zone:iot']) && multi.intraPolicies['zone:iot'].length === 1, 'records intra-zone policy');
 ok(multi.blockedHosts['host:cam1'] === true, 'tracks blocked host IDs');
 ok(multi.zoneEdges.some(function (e) { return e.from === 'zone:iot' && e.to === 'zone:lan' && e.action === 'deny'; }), 'expands private endpoint excluding unassigned');
+
+var uncertain = mapGraph.build({
+	zones: [{ id: 'unassigned', network: 'shared' }, { id: 'constructor', network: 'other' }],
+	devices: [{ id: 'missing', zone: null, interface: 'shared' }, { id: 'known', zone: 'constructor' }]
+});
+var unknownGroup = uncertain.zones.find(function (zone) { return zone.unassigned; });
+ok(unknownGroup && unknownGroup.id !== 'unassigned' && !unknownGroup.isolation && !unknownGroup.trust, 'unknown group does not replace or claim the policy of a real zone');
+ok(uncertain.nodes.find(function (node) { return node.id === 'host:missing'; }).zoneId === unknownGroup.id, 'explicitly unknown zone is not guessed from an ambiguous interface');
+ok(uncertain.nodes.find(function (node) { return node.id === 'host:known'; }).zoneId === 'constructor', 'zone names are stored as data, not object properties');
 
 /* 3. 512-node stress packing */
 var stressGraph = mapGraph.build({ stress: true, stressCount: 512 });

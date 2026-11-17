@@ -224,9 +224,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .wb-palette-wrapper { position: relative; }
 .wb-popover {
   position: absolute; top: calc(100% + 10px); right: 0; z-index: 130;
-  background: var(--wb-surface); border: 1px solid var(--wb-border);
+  background: var(--wb-surface-2); border: 1px solid var(--wb-border);
   border-radius: var(--wb-radius); box-shadow: var(--wb-shadow-lg); padding: 14px; min-width: 298px;
-  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   animation: wb-drop .18s var(--wb-ease);
 }
 .wb-popover[hidden] { display: none; }
@@ -702,9 +701,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .alert-message.fade-out { animation: wb-toast-out .3s ease-in forwards; }
 
 /* Modal (LuCI.ui.showModal) */
-#modal_overlay { position: fixed; inset: 0; z-index: 900; background: rgba(8, 10, 16, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); overflow: auto; opacity: 0; visibility: hidden; transition: opacity .15s ease-in, visibility .15s; padding: 5vh 14px; }
+#modal_overlay { position: fixed; inset: 0; z-index: 900; background: rgba(8, 10, 16, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); overflow: auto; opacity: 0; visibility: hidden; transition: opacity .15s ease-in, visibility 0s linear .15s; padding: 5vh 14px; }
 body.modal-overlay-active { overflow: hidden; height: 100vh; }
-body.modal-overlay-active #modal_overlay { opacity: 1; visibility: visible; }
+body.modal-overlay-active #modal_overlay { opacity: 1; visibility: visible; transition-delay: 0s; }
 .modal { width: 100%; max-width: 640px; min-width: 0; margin: 0 auto; padding: 22px 22px 16px; border: 1px solid var(--wb-border); border-radius: var(--wb-radius); background: var(--wb-surface); color: var(--wb-text); box-shadow: var(--wb-shadow-lg); animation: wb-modal-in .22s var(--wb-ease); font-size: 13.5px; }
 .modal.alert-message { border-left: 1px solid var(--wb-border); }
 .modal.alert-message.warning { border-left: 3px solid var(--wb-warn); }
