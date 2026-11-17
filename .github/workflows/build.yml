@@ -182,7 +182,13 @@ jobs:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: ${{ steps.release_tag.outputs.title }}
           prerelease: ${{ steps.release_tag.outputs.prerelease }}
-          maBoth packages are architecture-independent (`all`). Pick the pair matching your OpenWrt release:
+          make_latest: ${{ github.ref_type == 'tag' }}
+          fail_on_unmatched_files: true
+          files: release/*
+          body: |
+            Automated Wundr build from `${{ github.sha }}`.
+
+            Both packages are architecture-independent (`all`). Pick the pair matching your OpenWrt release:
 
             | OpenWrt version | Package manager | Assets |
             |---:|:---:|:---|
@@ -200,10 +206,4 @@ jobs:
             /etc/init.d/rpcd restart
             ```
 
-            Checksums are listed in `SHA256SUMS`
-            apk add --allow-untrusted ./luci-theme-wundr-*.apk
-            apk add --allow-untrusted ./luci-app-wundr-*.apk
-            /etc/init.d/rpcd restart
-            ```
-
-            Verify the checksums against `SHA256SUMS` before installing.
+            Checksums are listed in `SHA256SUMS`.
