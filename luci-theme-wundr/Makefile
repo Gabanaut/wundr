@@ -15,7 +15,7 @@ LUCI_MINIFY_JS:=0
 CONFIG_LUCI_CSSTIDY:=
 CONFIG_LUCI_JSMIN:=
 
-LUCI_TITLE:=Wundr theme — elegant, dual-mode LuCI skin
+LUCI_TITLE:=Wundr LuCI theme (Nordic, Kyoto, Classic)
 LUCI_DEPENDS:=+luci-base
 
 define Package/luci-theme-wundr/postinst

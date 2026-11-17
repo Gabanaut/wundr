@@ -21,17 +21,7 @@ on:
   push:
     branches: [main, master]
     tags: ['v*']
-    paths:
-      - 'luci-theme-wundr/**'
-      - 'luci-app-wundr/**'
-      - '.github/workflows/build.yml'
-      - 'smoke/**'
   pull_request:
-    paths:
-      - 'luci-theme-wundr/**'
-      - 'luci-app-wundr/**'
-      - '.github/workflows/build.yml'
-      - 'smoke/**'
   workflow_dispatch:
 
 concurrency:
@@ -51,10 +41,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install QA dependencies
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install QR decoder for round-trip check
         run: |
-          sudo apt-get update
-          sudo apt-get install -y nodejs python3-yaml
+          mkdir -p smoke/.cache
+          npm --prefix smoke/.cache install --no-save --no-audit --no-fund jsqr@1.4.0
 
       - name: Run static QA
         run: bash ./smoke/qa-static.sh
@@ -68,14 +63,17 @@ jobs:
       matrix:
         include:
           - release: '23.05.6'
+            series: '23.05'
             arch: x86_64-23.05.6
             extension: ipk
             label: 'legacy .ipk for OpenWrt 23.05.x'
           - release: '24.10.6'
+            series: '24.10'
             arch: x86_64-24.10.6
             extension: ipk
             label: 'current .ipk for OpenWrt 24.10.x'
           - release: '25.12.4'
+            series: '25.12'
             arch: x86_64-25.12.4
             extension: apk
             label: 'modern .apk for OpenWrt 25.12.x+'
@@ -98,7 +96,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find "$GITHUB_WORKSPACE/bin" -type f \( -name 'luci-theme-wundr*.${{ matrix.extension }}' -o -name 'luci-app-wundr*.${{ matrix.extension }}' \) -print -exec cp -v {} dist/ \;
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            if [ "${{ matrix.extension }}" = "ipk" ]; then
+              out="${base%_all.ipk}_openwrt-${{ matrix.series }}_all.ipk"
+            else
+              out="$base"
+            fi
+            cp -v "$f" "dist/$out"
+          done < <(find "$GITHUB_WORKSPACE/bin" -type f \( -name 'luci-theme-wundr*.${{ matrix.extension }}' -o -name 'luci-app-wundr*.${{ matrix.extension }}' \) -print0)
           echo "Built package list:"
           find dist -maxdepth 1 -type f -printf '%f\n' | sort
           test "$(find dist -maxdepth 1 -type f -name 'luci-theme-wundr*.${{ matrix.extension }}' | wc -l)" -ge 1 || {
@@ -176,30 +182,25 @@ jobs:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: ${{ steps.release_tag.outputs.title }}
           prerelease: ${{ steps.release_tag.outputs.prerelease }}
-          make_latest: ${{ github.ref_type == 'tag' }}
-          fail_on_unmatched_files: true
-          files: release/*
-          body: |
-            Automated Wundr build from `${{ github.sha }}`.
-
-            Pick by **OpenWrt version**, not router CPU — both packages are
-            architecture-independent.
+          maBoth packages are architecture-independent (`all`). Pick the pair matching your OpenWrt release:
 
             | OpenWrt version | Package manager | Assets |
             |---:|:---:|:---|
-            | 23.05.x | opkg | `luci-{theme,app}-wundr_*_all.ipk` |
-            | 24.10.x | opkg | `luci-{theme,app}-wundr_*_all.ipk` |
-            | 25.12.x and newer | apk | `luci-{theme,app}-wundr-*.apk` |
-
-            Install **both** packages (the app depends on the theme):
+            | 23.05.x | opkg | `luci-{theme,app}-wundr_*_openwrt-23.05_all.ipk` |
+            | 24.10.x | opkg | `luci-{theme,app}-wundr_*_openwrt-24.10_all.ipk` |
+            | 25.12.x+ | apk | `luci-{theme,app}-wundr-*.apk` |
 
             ```sh
             # OpenWrt 23.05 / 24.10
-            opkg install ./luci-theme-wundr_*_all.ipk
-            opkg install ./luci-app-wundr_*_all.ipk
+            opkg install ./luci-theme-wundr_*_all.ipk ./luci-app-wundr_*_all.ipk
             /etc/init.d/rpcd restart
 
             # OpenWrt 25.12+
+            apk add --allow-untrusted ./luci-theme-wundr-*.apk ./luci-app-wundr-*.apk
+            /etc/init.d/rpcd restart
+            ```
+
+            Checksums are listed in `SHA256SUMS`
             apk add --allow-untrusted ./luci-theme-wundr-*.apk
             apk add --allow-untrusted ./luci-app-wundr-*.apk
             /etc/init.d/rpcd restart

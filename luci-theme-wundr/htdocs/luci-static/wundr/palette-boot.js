@@ -1,4 +1,4 @@
-/* Wundr palette-boot.js — synchronous pre-paint studio & palette boot. */
+/* Wundr palette-boot.js - pre-paint theme and accent boot. */
 (function () {
 	'use strict';
 	var PALETTES = {

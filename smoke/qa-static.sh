@@ -17,19 +17,21 @@ else
 	say "  warn: node not found — skipping js check"
 fi
 
+PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+
 # 2. JSON validity
 for j in "$ROOT"/luci-app-wundr/root/usr/share/luci/menu.d/*.json \
          "$ROOT"/luci-app-wundr/root/usr/share/rpcd/acl.d/*.json; do
 	[ -f "$j" ] || continue
-	if command -v python >/dev/null 2>&1; then
-		python -m json.tool "$j" >/dev/null && say "  ok  json $j" || { say "  FAIL json $j"; FAIL=1; }
+	if [ -n "$PY" ]; then
+		"$PY" -m json.tool "$j" >/dev/null && say "  ok  json $j" || { say "  FAIL json $j"; FAIL=1; }
 	fi
 done
 
 # 2b. Menu actions must resolve to shipped views or menu aliases.
 MENU="$ROOT/luci-app-wundr/root/usr/share/luci/menu.d/luci-app-wundr.json"
-if command -v python >/dev/null 2>&1 && [ -f "$MENU" ]; then
-	python - "$MENU" <<'PY' || FAIL=1
+if [ -n "$PY" ] && [ -f "$MENU" ]; then
+	"$PY" - "$MENU" <<'PY' || FAIL=1
 import json
 import os
 import sys
@@ -84,8 +86,8 @@ fi
 #      matching executable in /usr/libexec/rpcd/. Catches the filename/object
 #      mismatch that 404s every call.
 LIBEXEC="$ROOT/luci-app-wundr/root/usr/libexec/rpcd"
-if command -v python >/dev/null 2>&1 && [ -d "$LIBEXEC" ]; then
-	python - "$ROOT" <<'PY' || FAIL=1
+if [ -n "$PY" ] && [ -d "$LIBEXEC" ]; then
+	"$PY" - "$ROOT" <<'PY' || FAIL=1
 import json
 import os
 import re
@@ -142,7 +144,7 @@ else
 	say "  ok  backend has no passive HTTP/DHCP side effect"
 fi
 
-# 4. Size budget: shell payload (cascade+app+shell+icons+charts+qr+map-graph + Studio Triad, gz estimate)
+# 4. Size budget: shell payload (cascade+app+shell+icons+charts+qr+map-graph, gz estimate)
 if command -v gzip >/dev/null; then
 	BYTES=$(cat "$ROOT"/luci-theme-wundr/htdocs/luci-static/wundr/*.css \
 	             "$ROOT"/luci-theme-wundr/htdocs/luci-static/wundr/*.js 2>/dev/null | gzip -c | wc -c)
@@ -152,6 +154,10 @@ fi
 
 # 5. OpenWrt 24+/25+ compatibility, contrast, palette-boot, QR & map-graph harnesses
 if command -v node >/dev/null; then
+	if [ ! -d "$ROOT/smoke/.cache/node_modules/jsqr" ] && command -v npm >/dev/null 2>&1; then
+		mkdir -p "$ROOT/smoke/.cache"
+		npm --prefix "$ROOT/smoke/.cache" install --no-save --no-audit --no-fund jsqr@1.4.0 >/dev/null 2>&1 || true
+	fi
 	for suite in contrast-check.js palette-boot-check.js qr-roundtrip.js map-graph-check.js openwrt-24-25-check.js; do
 		if [ -f "$ROOT/smoke/$suite" ]; then
 			command node "$ROOT/smoke/$suite" >/dev/null && say "  ok  smoke $suite" || { say "  FAIL smoke $suite"; FAIL=1; }

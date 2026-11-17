@@ -22,8 +22,8 @@
 	var GRAPHITE_KEYS = Object.keys(GRAPHITE.dark);
 	var STUDIOS = [
 		{ key: 'nordic',  label: 'Nordic',  sub: 'Frosted glass', c: '#1d5bd6' },
-		{ key: 'kyoto',   label: 'Kyoto',   sub: 'Washi & ink',   c: '#264b73' },
-		{ key: 'current', label: 'Classic', sub: 'Slate & ember', c: '#f48120' }
+		{ key: 'kyoto',   label: 'Kyoto',   sub: 'Paper & ink',   c: '#264b73' },
+		{ key: 'current', label: 'Classic', sub: 'Slate & orange',c: '#f48120' }
 	];
 
 	var currentStudio = 'nordic';
@@ -68,7 +68,7 @@
 		return 'rgba(' + r[0] + ', ' + r[1] + ', ' + r[2] + ', ' + (dark ? '0.18' : '0.14') + ')';
 	}
 
-	/* ---------- theme, studio triad & palette ---------- */
+	/* ---------- theme & palette ---------- */
 	function isDark() { return d.documentElement.getAttribute('data-theme') === 'dark'; }
 
 	function clearInlineAppearance(root) {
@@ -161,10 +161,10 @@
 		if (!pop) return;
 		var hasCustomAccent = !!currentPalette && !(currentStudio === 'current' && currentPalette === 'Splunk');
 		pop.innerHTML =
-			'<div class="wb-popover-h"><span>Studio style</span></div>' +
+			'<div class="wb-popover-h"><span>Theme</span></div>' +
 			'<div class="wb-studio-grid"></div>' +
-			'<div class="wb-popover-h"><span>Color accent</span>' +
-				(hasCustomAccent ? '<button type="button" class="wb-popover-reset">Studio default</button>' : '') +
+			'<div class="wb-popover-h"><span>Accent</span>' +
+				(hasCustomAccent ? '<button type="button" class="wb-popover-reset">Reset</button>' : '') +
 			'</div>' +
 			'<div class="wb-palette-grid"></div>';
 

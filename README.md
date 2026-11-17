@@ -1,74 +1,76 @@
 <div align="center">
 
-<img src="luci-theme-wundr/htdocs/luci-static/wundr/brand-mark.svg" width="52" alt="Wundr">
+<img src="luci-theme-wundr/htdocs/luci-static/wundr/brand-mark.svg" width="48" alt="Wundr">
 
 # Wundr
 
-**A calm, studio-crafted interface and LuCI theme for OpenWrt.**
+Modern LuCI theme and management UI for OpenWrt.
 
-OpenWrt 23.05 · 24.10 · 25.12+ &nbsp;·&nbsp; `opkg` & `apk` &nbsp;·&nbsp; 100% Offline &nbsp;·&nbsp; Apache-2.0
+OpenWrt 23.05 · 24.10 · 25.12+ &nbsp;·&nbsp; `opkg` & `apk` &nbsp;·&nbsp; Offline · ~40 KB gz &nbsp;·&nbsp; Apache-2.0
 
 </div>
 
 <br>
 
-![Wundr Dashboard in Nordic Glass with Studio Triad switcher](docs/screenshots/nordic-dark-dashboard.png)
+![Wundr Dashboard](docs/screenshots/nordic-dark-dashboard.png)
 
 <br>
 
-Wundr makes everyday router tasks effortless while keeping stock OpenWrt intact underneath. Every setting commits through LuCI's native UCI validation and 90-second rollback guard—no external CDNs, no telemetry, and ~40 KB gzipped total.
+Wundr puts daily router setup on a clean, mobile-friendly interface while using stock OpenWrt underneath. Every change goes through LuCI's standard UCI validation and 90-second rollback protection, with no external fonts, CDNs, or background services.
+
+Install both packages for the full interface, or `luci-theme-wundr` alone to skin stock LuCI.
 
 <br>
 
-## Studio Triad
+## Themes
 
-Switch instantly between three architectural finishes, Light or Dark mode, and eight WCAG AA–verified color accents from the top bar.
+Switch between three built-in looks, Light or Dark mode, and eight WCAG AA color accents from the top bar.
 
-| Finish | Materiality |
+| Theme | Description |
 | :--- | :--- |
-| **Nordic Glass** *(Default)* | Frosted acrylic surfaces, subtle Fjord glow, and a floating sidebar island. |
-| **Kyoto Sumi** | Warm *washi* paper by day, deep *sumi* charcoal by night, and quiet ledger rows. |
-| **Classic** | Crisp neutral slate with warm ember accents and tactile card elevation. |
+| **Nordic** *(Default)* | Translucent frosted cards and a detached sidebar on desktop. |
+| **Kyoto** | Warm paper in light mode, dark charcoal at night, and flat divider rows. |
+| **Classic** | Neutral slate cards with orange status accents. |
 
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/screenshots/kyoto-light-wifi.png" alt="Kyoto Sumi Light — Wi-Fi & Radios">
-      <p align="center"><sub><b>Kyoto Sumi · Light</b> — Multi-band Wi-Fi 7 &amp; QR sharing</sub></p>
+      <img src="docs/screenshots/kyoto-light-wifi.png" alt="Kyoto Light Wi-Fi">
+      <p align="center"><sub><b>Kyoto · Light</b> · Multi-band Wi-Fi &amp; QR sharing</sub></p>
     </td>
     <td width="50%">
-      <img src="docs/screenshots/classic-dark-security.png" alt="Classic Dark — Security & Port Forwards">
-      <p align="center"><sub><b>Classic · Dark</b> — Firewall posture &amp; port forwards</sub></p>
+      <img src="docs/screenshots/classic-dark-security.png" alt="Classic Dark Security">
+      <p align="center"><sub><b>Classic · Dark</b> · Firewall audit &amp; port forwards</sub></p>
     </td>
   </tr>
 </table>
 
 <br>
 
-## Policy Network Map
+## Network Map
 
-Every curve reflects an actual `/etc/config/firewall` forwarding or device rule—never guessed. Hover any segment or client to isolate its policy paths, or click a dot to inspect it.
+Draws live zones, DHCP clients, forwardings, and pause rules straight from `/etc/config/firewall`. Hover a zone or client to highlight its rules, or click a dot to inspect the device.
 
-![Wundr Policy Network Map](docs/screenshots/network-map.png)
+![Wundr Network Map](docs/screenshots/network-map.png)
 
 <br>
 
-## Everything You Need
+## What's Included
 
-| Area | Included |
+| Section | Coverage |
 | :--- | :--- |
-| **Dashboard & Search** | Live WAN sparklines, CPU/RAM health rail, offline Wi-Fi QR generator, and `Ctrl + K` page search. |
-| **Internet & VLANs** | DHCP, PPPoE, Static IP, MAC clone, IPv6 SLAAC/DHCPv6, static leases, and guided `802.1Q` VLAN segments. |
-| **Wi-Fi & Devices** | `2.4 / 5 / 6 GHz` (`HT`–`EHT320`), one-tap guest network wizard, live signal bars, and device pause. |
-| **Family & Security** | Kernel-enforced `fw4` bedtime schedules, firewall posture audit, and quick port forwarding. |
-| **QoS, Apps & System** | `cake` / `fq_codel` SQM shaping, service controls (`AdGuard`, `Tailscale`, `WireGuard`, `banIP`…), ping/trace, and logs. |
-| **Native LuCI** | Slide-out drawer for every stock OpenWrt page—or install `luci-theme-wundr` standalone. |
+| **Dashboard** | Live WAN throughput charts, CPU/RAM status rail, Wi-Fi QR sharing, and `Ctrl + K` search. |
+| **Internet & LAN** | DHCP, PPPoE, Static IP, MAC clone, MTU, IPv6 SLAAC/DHCPv6, and static DHCP leases. |
+| **VLANs** | Guided `802.1Q` bridge-VLAN editor (`br-lan.<vid>`, DHCP pool, firewall zone, port tag matrix). |
+| **Wi-Fi & Devices** | `2.4 / 5 / 6 GHz` (`HT` to `EHT320`), guest Wi-Fi wizard, live dBm signal bars, and device pause. |
+| **Family & Security** | Per-person `fw4` bedtime schedules, firewall posture checks, and quick port forwarding. |
+| **QoS, Apps & System** | `cake` / `fq_codel` SQM shaping, service controls (`AdGuard`, `Tailscale`, `WireGuard`, `banIP`), ping/trace, and logs. |
 
 <br>
 
 ## Install
 
-Grab the universal (`all`) packages for your OpenWrt version from [**Releases**](https://github.com/Gabanaut/wundr/releases).
+Download the universal (`all`) packages for your OpenWrt release from [**Releases**](https://github.com/Gabanaut/wundr/releases).
 
 **OpenWrt 24.10 & 23.05 (`opkg`)**
 
@@ -84,16 +86,17 @@ scp luci-theme-wundr-*.apk luci-app-wundr-*.apk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1 'apk add --allow-untrusted /tmp/luci-theme-wundr-*.apk /tmp/luci-app-wundr-*.apk && /etc/init.d/rpcd restart'
 ```
 
-For SDK builds, theme-only setup, or clean uninstall commands, see [docs/PACKAGING.md](docs/PACKAGING.md).
+SDK build instructions and uninstall steps are in [docs/PACKAGING.md](docs/PACKAGING.md).
 
 <br>
 
-## Verify & License
+## Test & License
 
 ```sh
-sh smoke/qa-static.sh   # syntax, WCAG AA contrast, QR round-trip, map geometry & OpenWrt 24/25 checks
+sh smoke/qa-static.sh
 ```
 
-Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
 
 

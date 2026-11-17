@@ -73,8 +73,8 @@ Both Makefiles set `LUCI_MINIFY_CSS:=0`, `LUCI_MINIFY_JS:=0`,
 minifiers **on** (via `luci-base`'s config symbols), and `csstidy` is a
 CSS2-era tool that mangles modern CSS (`color-mix()`, `backdrop-filter`,
 `:is()`, `:has()`, multi-stop gradients) while `jsmin` predates modern JS.
-Committed CSS/JS ships byte-for-byte (~40.5 KB gzipped total for the entire
-Studio Triad shell + icons + charts + QR encoder + SVG topology engine).
+Committed CSS/JS ships byte-for-byte (~40.5 KB gzipped total for the theme
+shell, icons, charts, QR encoder, and SVG topology engine).
 
 ### What lands where
 

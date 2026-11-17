@@ -110,7 +110,7 @@ check('on-accent #14151a on Splunk accent', '#14151a', '#f48120');
 check('Splunk accent on dark surface', '#f48120', DARK_SURFACE);
 check('Splunk accent on dark soft18', '#f48120', blend('#f48120', 0.18, DARK_SURFACE));
 
-console.log('== Studio Triad (Nordic Glass & Kyoto Sumi) WCAG AA ==');
+console.log('== Nordic & Kyoto themes WCAG AA ==');
 var NORDIC_L_SURF = blend('#ffffff', 0.88, '#eaf0f7');
 var NORDIC_D_SURF = blend('#141d2f', 0.84, '#090e18');
 check('Nordic light text on surface', '#0f172a', NORDIC_L_SURF);

@@ -6,7 +6,7 @@ PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=Wundr contributors
 LUCI_PKGARCH:=all
-LUCI_TITLE:=Wundr — consumer-grade router UI (Dashboard, Wi-Fi, Families, Security, …)
+LUCI_TITLE:=Wundr OpenWrt UI (Dashboard, Wi-Fi, VLANs, Family, Map)
 LUCI_DEPENDS:=+luci-theme-wundr +luci-base +rpcd +jsonfilter
 
 # Same rationale as the theme: keep committed JS/CSS byte-for-byte.

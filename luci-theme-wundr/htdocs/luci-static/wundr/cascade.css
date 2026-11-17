@@ -48,7 +48,7 @@
   color-scheme: dark;
 }
 
-/* Studio Triad: Nordic Glass (spatial frosted acrylic + floating island) */
+/* Theme: Nordic (frosted glass + floating sidebar) */
 [data-studio="nordic"] {
   --wb-bg: #eaf0f7; --wb-bg-2: #dfe8f3;
   --wb-surface: rgba(255, 255, 255, .88); --wb-surface-2: #f1f5fb;
@@ -83,7 +83,7 @@
   --wb-focus-ring: 0 0 0 3px rgba(104, 168, 255, .38);
 }
 
-/* Studio Triad: Kyoto Sumi (washi paper, Ai-iro indigo & de-boxed ledgers) */
+/* Theme: Kyoto (warm paper, indigo & ledger rows) */
 [data-studio="kyoto"] {
   --wb-bg: #f2efe7; --wb-bg-2: #e7e3d8;
   --wb-surface: #faf9f5; --wb-surface-2: #efece3;
@@ -778,7 +778,7 @@ body.modal-overlay-active #modal_overlay { opacity: 1; visibility: visible; }
 }
 @media (max-width: 480px) { .wb-content .hide-xs { display: none !important; } }
 
-/* Studio Triad architectural surfaces & geometry */
+/* Theme layout overrides */
 [data-studio="nordic"] body.wundr {
   background-image: radial-gradient(circle at 14% 0%, rgba(56, 189, 248, .13), transparent 44%),
                     radial-gradient(circle at 86% 10%, rgba(29, 91, 214, .10), transparent 40%);
