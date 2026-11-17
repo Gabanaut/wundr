@@ -68,13 +68,13 @@ buildroot produces `.apk` from the same metadata.
 
 ### Minification is intentionally disabled
 
-Both Makefiles set `CONFIG_LUCI_CSSTIDY:=` and `CONFIG_LUCI_JSMIN:=`.
-`luci.mk` defaults both minifiers **on** (via `luci-base`'s config
-symbols), but csstidy is a CSS2-era tool that mangles modern CSS —
-`color-mix()`, `backdrop-filter`, multi-stop gradients — and jsmin
-predates optional chaining and template literals. Our committed CSS/JS is
-already hand-minified where it matters; it must reach the device
-byte-for-byte. (UniWRT hit this exact bug and ships the same workaround.)
+Both Makefiles set `LUCI_MINIFY_CSS:=0`, `LUCI_MINIFY_JS:=0`,
+`CONFIG_LUCI_CSSTIDY:=`, and `CONFIG_LUCI_JSMIN:=`. `luci.mk` defaults both
+minifiers **on** (via `luci-base`'s config symbols), and `csstidy` is a
+CSS2-era tool that mangles modern CSS (`color-mix()`, `backdrop-filter`,
+`:is()`, `:has()`, multi-stop gradients) while `jsmin` predates modern JS.
+Committed CSS/JS ships byte-for-byte (~40.5 KB gzipped total for the entire
+Studio Triad shell + icons + charts + QR encoder + SVG topology engine).
 
 ### What lands where
 

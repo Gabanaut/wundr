@@ -1,4 +1,14 @@
 {
+	"wundr": {
+		"title": "Wundr",
+		"order": 5,
+		"action": { "type": "firstchild" },
+		"auth": {
+			"methods": [ "cookie:sysauth_https", "cookie:sysauth_http" ],
+			"login": true
+		},
+		"depends": { "acl": [ "luci-app-wundr" ], "uci": { "wundr": true } }
+	},
 	"wundr/dashboard": {
 		"title": "Dashboard",
 		"order": 10,

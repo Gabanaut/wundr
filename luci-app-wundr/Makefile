@@ -1,26 +1,31 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-wundr
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=Wundr team
+PKG_MAINTAINER:=Wundr contributors
 LUCI_PKGARCH:=all
 LUCI_TITLE:=Wundr — consumer-grade router UI (Dashboard, Wi-Fi, Families, Security, …)
 LUCI_DEPENDS:=+luci-theme-wundr +luci-base +rpcd +jsonfilter
 
 # Same rationale as the theme: keep committed JS/CSS byte-for-byte.
+LUCI_MINIFY_CSS:=0
+LUCI_MINIFY_JS:=0
 CONFIG_LUCI_CSSTIDY:=
 CONFIG_LUCI_JSMIN:=
 
-include $(TOPDIR)/feeds/luci/luci.mk
+define Package/luci-app-wundr/conffiles
+/etc/config/wundr
+endef
 
-# On removal, delete every Wundr-derived firewall rule (device pause / family
-# bedtime) so a paused device is never left blocked after the app is gone.
-# The rules take effect once the firewall is reloaded by the next service
-# start or by the user's own "Save & Apply" in the native pages.
+# On removal (never on upgrade), delete every Wundr-derived firewall rule
+# (device pause / family bedtime) so a paused device is never left blocked
+# after the app is gone.
 define Package/luci-app-wundr/prerm
 #!/bin/sh
+case "$$1" in *upgrade*) exit 0 ;; esac
+[ "$${PKG_UPGRADE:-}" = 1 ] && exit 0
 [ -n "$$IPKG_INSTROOT" ] && exit 0
 uci -q show firewall >/dev/null 2>&1 || exit 0
 CHANGED=0
@@ -35,5 +40,7 @@ done
 [ "$$CHANGED" = 1 ] && uci -q commit firewall
 exit 0
 endef
+
+include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

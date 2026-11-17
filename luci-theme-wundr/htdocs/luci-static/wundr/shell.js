@@ -1,36 +1,36 @@
 'use strict';
-/* Wundr shell.js — client controller for the theme chrome.
- * Dark/light mode, palette schemes, navigation drawer, page search (Ctrl+K),
- * live status rail, advanced (full LuCI) drawer and the toast helper.
- * Runs after luci.js, so the global `L` is available. */
-
 (function () {
 	var d = document;
-
-	/* Internal ids are stable so saved preferences survive renames. */
 	var PALETTES = [
-		{ id: 'Splunk',    name: 'Ember',    a: '#f48120', b: '#ff9e3d' },
-		{ id: 'Aurora',    name: 'Aurora',   a: '#5b5fe8', b: '#8b5cf6' },
-		{ id: 'Robinhood', name: 'Meadow',   a: '#12a150', b: '#22c55e' },
-		{ id: 'UniFi',     name: 'Harbor',   a: '#0065ff', b: '#2f88ff' },
-		{ id: 'FT',        name: 'Luxe',     a: '#1c4f9e', b: '#2f6fd0' },
-		{ id: 'Honey',     name: 'Honey',    a: '#e09f3e', b: '#c47f1f' },
-		{ id: 'Nord',      name: 'Nordic',   a: '#5fa8bd', b: '#81a1c1' },
+		{ id: 'Splunk',    name: 'Ember',    a: '#f48120', b: '#ff9e3d', t: '#a05515', on: '#14151a' },
+		{ id: 'Aurora',    name: 'Aurora',   a: '#5b5fe8', b: '#8b5cf6', t: '#5256d1', on: '#ffffff' },
+		{ id: 'Robinhood', name: 'Meadow',   a: '#12a150', b: '#22c55e', t: '#0d763b', on: '#14151a' },
+		{ id: 'UniFi',     name: 'Harbor',   a: '#0065ff', b: '#2f88ff', t: '#0052cf', on: '#ffffff' },
+		{ id: 'FT',        name: 'Luxe',     a: '#1c4f9e', b: '#2f6fd0', t: '#1c4f9e', on: '#ffffff' },
+		{ id: 'Honey',     name: 'Honey',    a: '#e09f3e', b: '#c47f1f', t: '#855e25', on: '#14151a' },
+		{ id: 'Nord',      name: 'Nordic',   a: '#5fa8bd', b: '#81a1c1', t: '#3e6e7c', on: '#14151a' },
 		{ id: 'Uber',      name: 'Graphite', a: '#3a3a3a', b: '#141414' }
 	];
 	var GRAPHITE = {
 		dark:  { '--wb-bg': '#050505', '--wb-bg-2': '#0b0b0b', '--wb-surface': '#0f0f0f', '--wb-surface-2': '#171717', '--wb-border': '#222222', '--wb-border-strong': '#333',
-			'--wb-text': '#f5f5f5', '--wb-text-soft': '#8a8a8a', '--wb-text-mute': '#5c5c5c',
+			'--wb-text': '#f5f5f5', '--wb-text-soft': '#8a8a8a', '--wb-text-mute': '#909090',
 			'--wb-accent': '#f2f2f2', '--wb-accent-2': '#b5b5b5', '--wb-on-accent': '#0a0a0a', '--wb-accent-soft': 'rgba(242,242,242,0.12)' },
 		light: { '--wb-bg': '#f7f7f7', '--wb-bg-2': '#efefef', '--wb-surface': '#ffffff', '--wb-surface-2': '#f1f1f1', '--wb-border': '#e6e6e6', '--wb-border-strong': '#cfcfcf',
-			'--wb-text': '#0a0a0a', '--wb-text-soft': '#6f6f6f', '--wb-text-mute': '#9a9a9a',
+			'--wb-text': '#0a0a0a', '--wb-text-soft': '#6f6f6f', '--wb-text-mute': '#6a6a6a',
 			'--wb-accent': '#0a0a0a', '--wb-accent-2': '#262626', '--wb-on-accent': '#ffffff', '--wb-accent-soft': 'rgba(10,10,10,0.08)' }
 	};
 	var GRAPHITE_KEYS = Object.keys(GRAPHITE.dark);
+	var STUDIOS = [
+		{ key: 'nordic',  label: 'Nordic',  sub: 'Frosted glass', c: '#1d5bd6' },
+		{ key: 'kyoto',   label: 'Kyoto',   sub: 'Washi & ink',   c: '#264b73' },
+		{ key: 'current', label: 'Classic', sub: 'Slate & ember', c: '#f48120' }
+	];
 
-	var currentPalette = 'Splunk';
+	var currentStudio = 'nordic';
+	var currentPalette = null;
 
 	function store(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+	function remove(key) { try { localStorage.removeItem(key); } catch (e) {} }
 	function load(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 
 	/* ---------- colour helpers ---------- */
@@ -46,38 +46,80 @@
 		if (a < b) { var t = a; a = b; b = t; }
 		return (a + 0.05) / (b + 0.05);
 	}
+	function darken(hex, f) {
+		return '#' + hexToRgb(hex).map(function (v) { return Math.round(v * f); })
+			.map(function (v) { return v.toString(16).padStart(2, '0'); }).join('');
+	}
 	function bestOnAccent(accent) {
 		return contrast('#14151a', accent) >= contrast('#ffffff', accent) ? '#14151a' : '#ffffff';
+	}
+	function accentText(accent) {
+		var t = accent, i = 0;
+		function ok(x) {
+			return contrast(x, '#ffffff') >= 4.5 && contrast(x, '#f7f8fa') >= 4.5 &&
+				contrast(x, accentSoft(accent, false)) >= 4.5 &&
+				contrast(x, accentSoft(accent, true)) >= 4.5;
+		}
+		while (i < 10 && ok(t) === false) { t = darken(t, 0.90); i++; }
+		return t;
 	}
 	function accentSoft(accent, dark) {
 		var r = hexToRgb(accent);
 		return 'rgba(' + r[0] + ', ' + r[1] + ', ' + r[2] + ', ' + (dark ? '0.18' : '0.14') + ')';
 	}
 
-	/* ---------- theme & palette ---------- */
+	/* ---------- theme, studio triad & palette ---------- */
 	function isDark() { return d.documentElement.getAttribute('data-theme') === 'dark'; }
+
+	function clearInlineAppearance(root) {
+		GRAPHITE_KEYS.forEach(function (k) { root.style.removeProperty(k); });
+		['--wb-accent', '--wb-accent-2', '--wb-grad', '--wb-on-accent', '--wb-accent-soft', '--wb-accent-text'].forEach(function (k) { root.style.removeProperty(k); });
+	}
+
+	function applyStudio(key) {
+		currentStudio = STUDIOS.some(function (s) { return s.key === key; }) ? key : 'nordic';
+		store('wb-studio', currentStudio);
+		d.documentElement.setAttribute('data-studio', currentStudio);
+		remove('wb-palette');
+		currentPalette = currentStudio === 'current' ? 'Splunk' : null;
+		clearInlineAppearance(d.documentElement);
+		if (currentPalette) applyPalette(currentPalette);
+		else {
+			renderPalettePopover();
+			d.dispatchEvent(new CustomEvent('wb-theme-change', { detail: { studio: currentStudio, palette: null, dark: isDark() } }));
+		}
+	}
 
 	function applyPalette(id) {
 		var root = d.documentElement;
+		clearInlineAppearance(root);
+		if (!id && (currentStudio === 'nordic' || currentStudio === 'kyoto')) {
+			currentPalette = null;
+			remove('wb-palette');
+			renderPalettePopover();
+			d.dispatchEvent(new CustomEvent('wb-theme-change', { detail: { studio: currentStudio, palette: null, dark: isDark() } }));
+			return;
+		}
 		currentPalette = PALETTES.some(function (p) { return p.id === id; }) ? id : 'Splunk';
 		store('wb-palette', currentPalette);
-		GRAPHITE_KEYS.forEach(function (k) { root.style.removeProperty(k); });
-		['--wb-accent', '--wb-accent-2', '--wb-grad', '--wb-on-accent', '--wb-accent-soft'].forEach(function (k) { root.style.removeProperty(k); });
 
 		if (currentPalette === 'Uber') {
 			var set = GRAPHITE[isDark() ? 'dark' : 'light'];
 			Object.keys(set).forEach(function (k) { root.style.setProperty(k, set[k]); });
 			root.style.setProperty('--wb-grad', 'linear-gradient(135deg, ' + set['--wb-accent'] + ', ' + set['--wb-accent-2'] + ')');
+			root.style.setProperty('--wb-accent-text', set['--wb-accent']);
 		} else {
 			var pal = PALETTES.filter(function (p) { return p.id === currentPalette; })[0];
+			var lightTxt = (currentStudio === 'kyoto' && currentPalette === 'Splunk') ? '#904c13' : (pal.t || accentText(pal.a));
 			root.style.setProperty('--wb-accent', pal.a);
 			root.style.setProperty('--wb-accent-2', pal.b);
 			root.style.setProperty('--wb-grad', 'linear-gradient(135deg, ' + pal.a + ', ' + pal.b + ')');
-			root.style.setProperty('--wb-on-accent', bestOnAccent(pal.a));
+			root.style.setProperty('--wb-on-accent', pal.on || bestOnAccent(pal.a));
+			root.style.setProperty('--wb-accent-text', isDark() ? pal.a : lightTxt);
 			root.style.setProperty('--wb-accent-soft', accentSoft(pal.a, isDark()));
 		}
 		renderPalettePopover();
-		d.dispatchEvent(new CustomEvent('wb-theme-change', { detail: { palette: currentPalette, dark: isDark() } }));
+		d.dispatchEvent(new CustomEvent('wb-theme-change', { detail: { studio: currentStudio, palette: currentPalette, dark: isDark() } }));
 	}
 
 	function setThemeMode(mode) {
@@ -90,7 +132,12 @@
 	}
 
 	function initTheme() {
+		var attrSt = d.documentElement.getAttribute('data-studio');
+		var savedSt = load('wb-studio') || attrSt;
+		currentStudio = STUDIOS.some(function (s) { return s.key === savedSt; }) ? savedSt : 'nordic';
+		d.documentElement.setAttribute('data-studio', currentStudio);
 		setThemeMode(isDark() ? 'dark' : 'light');
+
 		var btn = d.getElementById('wb-theme-toggle');
 		if (btn) btn.addEventListener('click', function () {
 			var mode = isDark() ? 'light' : 'dark';
@@ -105,19 +152,50 @@
 				applyPalette(currentPalette);
 			});
 		}
-		applyPalette(load('wb-palette') || 'Splunk');
+		var savedPal = load('wb-palette');
+		applyPalette(savedPal || (currentStudio === 'current' ? 'Splunk' : null));
 	}
 
 	function renderPalettePopover() {
 		var pop = d.getElementById('wb-palette-popover');
 		if (!pop) return;
-		pop.innerHTML = '<div class="wb-popover-h">Color palette</div><div class="wb-palette-grid"></div>';
+		var hasCustomAccent = !!currentPalette && !(currentStudio === 'current' && currentPalette === 'Splunk');
+		pop.innerHTML =
+			'<div class="wb-popover-h"><span>Studio style</span></div>' +
+			'<div class="wb-studio-grid"></div>' +
+			'<div class="wb-popover-h"><span>Color accent</span>' +
+				(hasCustomAccent ? '<button type="button" class="wb-popover-reset">Studio default</button>' : '') +
+			'</div>' +
+			'<div class="wb-palette-grid"></div>';
+
+		var sGrid = pop.querySelector('.wb-studio-grid');
+		STUDIOS.forEach(function (st) {
+			var btn = d.createElement('button');
+			btn.type = 'button';
+			var act = st.key === currentStudio;
+			btn.className = 'wb-studio-btn' + (act ? ' active' : '');
+			btn.setAttribute('aria-pressed', String(act));
+			btn.innerHTML = '<b><i style="background:' + st.c + '"></i>' + st.label + '</b><small>' + st.sub + '</small>';
+			btn.addEventListener('click', function (ev) {
+				ev.stopPropagation();
+				applyStudio(st.key);
+			});
+			sGrid.appendChild(btn);
+		});
+
+		var resetBtn = pop.querySelector('.wb-popover-reset');
+		if (resetBtn) resetBtn.addEventListener('click', function (ev) {
+			ev.stopPropagation();
+			applyPalette(currentStudio === 'current' ? 'Splunk' : null);
+		});
+
 		var grid = pop.querySelector('.wb-palette-grid');
 		PALETTES.forEach(function (p) {
 			var item = d.createElement('button');
 			item.type = 'button';
-			item.className = 'wb-palette-item' + (p.id === currentPalette ? ' active' : '');
-			item.setAttribute('aria-pressed', String(p.id === currentPalette));
+			var isAct = p.id === currentPalette;
+			item.className = 'wb-palette-item' + (isAct ? ' active' : '');
+			item.setAttribute('aria-pressed', String(isAct));
 			item.innerHTML = '<span class="wb-swatch" style="background:linear-gradient(135deg, ' + p.a + ', ' + p.b + ')"></span><span>' + p.name + '</span>';
 			item.addEventListener('click', function (ev) {
 				ev.stopPropagation();
@@ -270,7 +348,7 @@
 
 	function hideSearch() {
 		var box = d.getElementById('wb-search-results');
-		if (box) { box.hidden = true; box.innerHTML = ''; }
+		if (box) { box.hidden = true; box.innerHTML = ''; box.removeAttribute('aria-activedescendant'); }
 		searchActive = -1;
 	}
 
@@ -297,6 +375,7 @@
 			hits.forEach(function (it, i) {
 				var a = d.createElement('a');
 				a.className = 'wb-search-item' + (i === 0 ? ' is-active' : '');
+				a.id = 'wb-search-item-' + i;
 				a.href = it.href;
 				a.setAttribute('role', 'option');
 				a.innerHTML = (window.wbIcon ? wbIcon(it.kind === 'wundr' ? 'dashboard' : 'sliders', 16) : '') + '<strong></strong><span class="path"></span>';
@@ -305,6 +384,7 @@
 				box.appendChild(a);
 			});
 			searchActive = hits.length ? 0 : -1;
+			box.setAttribute('aria-activedescendant', searchActive >= 0 ? 'wb-search-item-0' : '');
 			box.hidden = false;
 		});
 	}
@@ -324,6 +404,7 @@
 				searchActive = (searchActive + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
 				items.forEach(function (el, i) { el.classList.toggle('is-active', i === searchActive); });
 				items[searchActive].scrollIntoView({ block: 'nearest' });
+				box.setAttribute('aria-activedescendant', items[searchActive].id);
 			}
 			if (ev.key === 'Enter' && items.length && searchActive >= 0) {
 				ev.preventDefault();
@@ -422,7 +503,7 @@
 		return t;
 	}
 
-	window.WB = { toast: toast, palettes: PALETTES, applyPalette: applyPalette };
+	window.WB = { toast: toast, palettes: PALETTES, studios: STUDIOS, applyPalette: applyPalette, applyStudio: applyStudio };
 
 	function boot() {
 		initTheme();

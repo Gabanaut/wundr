@@ -27,12 +27,17 @@
       try {
         var t = localStorage.getItem('wb-theme');
         if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
-        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        var s = localStorage.getItem('wb-studio');
+        if (s !== 'current' && s !== 'nordic' && s !== 'kyoto') s = 'nordic';
+        var r = document.documentElement;
+        r.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        r.setAttribute('data-studio', s);
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="{{ media }}/cascade.css?v=0.2.0">
-  <link rel="stylesheet" href="{{ media }}/app.css?v=0.2.0">
+  <script src="{{ media }}/palette-boot.js"></script>
+  <link rel="stylesheet" href="{{ media }}/cascade.css">
+  <link rel="stylesheet" href="{{ media }}/app.css">
 </head>
 <body class="lang_{{ dispatcher.lang }} wundr wb-login-body">
   <div class="wb-login-bg" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -46,14 +51,14 @@
         </div>
       </div>
 
-      {% if (fuser): %}
+      {% if (fuser && !auth_plugin): %}
       <div class="alert-message error" role="alert">
         <p>{{ _('Invalid username and/or password! Please try again.') }}</p>
       </div>
       {% endif %}
 
-      {% if (auth_message && !fuser): %}
-      <div class="alert-message" role="status">
+      {% if (auth_message): %}
+      <div class="alert-message{% if (auth_plugin): %} warning{% endif %}" role="status">
         <p>{{ auth_message }}</p>
       </div>
       {% endif %}
@@ -74,12 +79,12 @@
           <input
             type="{{ field.type ?? 'text' }}"
             name="{{ field.name }}"
-            {% if (field.placeholder): %}placeholder="{{ field.placeholder }}"{% endif %}
-            {% if (field.inputmode): %}inputmode="{{ field.inputmode }}"{% endif %}
-            {% if (field.pattern): %}pattern="{{ field.pattern }}"{% endif %}
-            {% if (field.maxlength): %}maxlength="{{ field.maxlength }}"{% endif %}
-            {% if (field.autocomplete): %}autocomplete="{{ field.autocomplete }}"{% endif %}
-            {% if (field.required): %}required{% endif %}
+            {% if (field.placeholder): %} placeholder="{{ field.placeholder }}"{% endif %}
+            {% if (field.inputmode): %} inputmode="{{ field.inputmode }}"{% endif %}
+            {% if (field.pattern): %} pattern="{{ field.pattern }}"{% endif %}
+            {% if (field.maxlength): %} maxlength="{{ field.maxlength }}"{% endif %}
+            {% if (field.autocomplete): %} autocomplete="{{ field.autocomplete }}"{% endif %}
+            {% if (field.required): %} required{% endif %}
           >
         </label>
         {% endfor %}
@@ -99,7 +104,7 @@
       <button type="submit" class="wb-btn primary wb-login-submit">{{ _('Sign in') }}</button>
       <div class="wb-login-foot">
         <span>{{ version.distname }} {{ version.distversion }}</span>
-        <a href="https://github.com/wundr-router/wundr" target="_blank" rel="noreferrer">Powered by Wundr</a>
+        <a href="https://github.com/Gabanaut/wundr" target="_blank" rel="noreferrer">Powered by Wundr</a>
       </div>
     </form>
   </main>

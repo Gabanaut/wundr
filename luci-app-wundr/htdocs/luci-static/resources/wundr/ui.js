@@ -243,10 +243,34 @@ function bandLabel(band, channel) {
 	return _('Radio');
 }
 
+function menuHas(tree, route) {
+	if (!tree || !route) return false;
+	var cur = tree, parts = String(route).split('/');
+	for (var i = 0; i < parts.length && cur; i++)
+		cur = cur.children && cur.children[parts[i]];
+	return !!cur;
+}
+
+/* OpenWrt 24.10 & 25.12+ ship `admin/system/package-manager` (opkg/apk);
+ * OpenWrt 23.05 shipped `admin/system/opkg`. Resolve dynamically via menu. */
+function pkgLink(attrs, children) {
+	var a = E('a', Object.assign({ 'href': L.url('admin/system/package-manager') }, attrs || {}), children);
+	if (ui && ui.menu && typeof ui.menu.load === 'function') {
+		ui.menu.load().then(function(tree) {
+			var cands = [ 'admin/system/package-manager', 'admin/system/opkg', 'admin/system/software' ];
+			for (var i = 0; i < cands.length; i++) {
+				if (menuHas(tree, cands[i])) { a.href = L.url(cands[i]); break; }
+			}
+		}).catch(function() {});
+	}
+	return a;
+}
+
 return baseclass.extend({
 	icon: icon, iconLabel: iconLabel, iconButton: iconButton, iconLink: iconLink, help: help,
 	pill: pill, stat: stat, hero: hero, card: card, kv: kv, empty: empty, toast: toast, toggle: toggle,
 	apply: apply, confirm: confirm, formModal: formModal, input: input, select: select,
 	fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, fmtDuration: fmtDuration,
-	signalQuality: signalQuality, sigBars: sigBars, macKey: macKey, encryptionLabel: encryptionLabel, bandLabel: bandLabel
+	signalQuality: signalQuality, sigBars: sigBars, macKey: macKey, encryptionLabel: encryptionLabel, bandLabel: bandLabel,
+	menuHas: menuHas, pkgLink: pkgLink
 });

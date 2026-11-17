@@ -4,19 +4,21 @@
 		"read": {
 			"ubus": {
 				"wundr": [ "diagnostic" ],
-				"luci-rpc": [ "getHostHints", "getDHCPLeases" ],
+				"luci-rpc": [ "getHostHints", "getDHCPLeases", "getNetworkDevices", "getWirelessDevices", "getBoardJSON" ],
 				"luci": [ "getTimezones", "getRealtimeStats" ],
 				"system": [ "board", "info" ],
+				"network": [ "get_proto_handlers" ],
 				"network.interface": [ "dump" ],
 				"network.device": [ "status" ],
-				"iwinfo": [ "info", "assoclist" ],
+				"network.wireless": [ "status" ],
+				"iwinfo": [ "info", "assoclist", "freqlist", "txpwrlist", "countrylist" ],
 				"rc": [ "list" ],
 				"log": [ "read" ]
 			},
 			"uci": [ "wundr", "network", "wireless", "dhcp", "firewall", "system", "luci", "sqm" ]
 		},
 		"write": {
-			"uci": [ "wundr", "network", "wireless", "dhcp", "firewall" ],
+			"uci": [ "wundr", "network", "wireless", "dhcp", "firewall", "system", "sqm" ],
 			"ubus": { "rc": [ "init" ] }
 		}
 	}

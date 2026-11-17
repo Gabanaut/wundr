@@ -1,8 +1,8 @@
 'use strict';
-
 (function (window, document) {
 	var SVG_NS = 'http://www.w3.org/2000/svg';
 	var graphSerial = 0;
+	var SPECIAL_TYPES = { internet: true, router: true };
 	var DEFAULT_ZONES = [
 		{ id: 'lan', name: 'Main LAN', cidr: '192.168.0.0/24', network: 'Main', isolation: false, trust: 'Trusted' },
 		{ id: 'guest', name: 'Guest Wi-Fi', cidr: '192.168.20.0/24', network: 'Guest', isolation: true, trust: 'Untrusted' },
@@ -11,120 +11,130 @@
 	];
 
 	function svg(name, attrs) {
-		var node = document.createElementNS(SVG_NS, name);
-		Object.keys(attrs || {}).forEach(function (key) {
-			if (attrs[key] != null) node.setAttribute(key, String(attrs[key]));
+		var el = document.createElementNS(SVG_NS, name);
+		Object.keys(attrs || {}).forEach(function (k) {
+			if (attrs[k] != null) el.setAttribute(k, String(attrs[k]));
 		});
-		return node;
+		return el;
 	}
 
-	function addText(parent, x, y, value, className, attrs) {
-		var node = svg('text', Object.assign({ x: x, y: y, 'class': className || '' }, attrs || {}));
-		node.textContent = String(value == null ? '' : value);
-		parent.appendChild(node);
-		return node;
+	function addText(parent, x, y, value, cls, attrs) {
+		var el = svg('text', Object.assign({ x: x, y: y, 'class': cls || '' }, attrs || {}));
+		el.textContent = String(value == null ? '' : value);
+		parent.appendChild(el);
+		return el;
 	}
 
-	function clear(node) {
-		while (node.firstChild) node.removeChild(node.firstChild);
-	}
-
-	function padded(value) {
-		return ('00' + value).slice(-3);
+	function clear(el) {
+		while (el && el.firstChild) el.removeChild(el.firstChild);
 	}
 
 	function clock() {
 		return window.performance && typeof window.performance.now === 'function' ? window.performance.now() : Date.now();
 	}
 
-	function findZone(device, zones) {
-		var zoneId = String(device && (device.zone || '')).toLowerCase();
-		var network = String(device && (device.network || device.interface || '')).toLowerCase();
-		return zones.filter(function (zone) {
-			return String(zone.id || '').toLowerCase() === zoneId || String(zone.network || '').toLowerCase() === network;
-		})[0] || null;
-	}
-
-	function esc(value) {
-		return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+	function esc(v) {
+		return String(v == null ? '' : v).replace(/[&<>"']/g, function (ch) {
 			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
 		});
 	}
 
-	/* Rendered special endpoints: only real packet destinations. 'internal'
-	   and 'private' aggregates are resolved onto zones instead of drawn. */
-	var SPECIAL_TYPES = { internet: true, router: true };
-	function isSpecialType(type) { return !!SPECIAL_TYPES[String(type || '')]; }
+	function findZone(device, zones) {
+		if (!device) return null;
+		var zid = String(device.zone || '').toLowerCase();
+		var net = String(device.network || device.interface || '').toLowerCase();
+		for (var i = 0; i < zones.length; i++) {
+			var z = zones[i];
+			var id = String(z.id || '').toLowerCase();
+			var zn = String(z.network || '').toLowerCase();
+			var tokens = zn ? zn.split(/\s+/) : [];
+			if ((zid && id === zid) || (net && (zn === net || id === net || tokens.indexOf(net) >= 0))) return z;
+		}
+		return null;
+	}
 
-	function zoneHostOf(hostId, devices, zones) {
+	function zoneHostOf(hostId, devicesById, zones) {
 		if (String(hostId).indexOf('host:') !== 0) return '';
-		var device = devices.filter(function (device) { return ('host:' + device.id) === hostId; })[0];
-		if (!device) return '';
-		var zone = findZone(device, zones);
-		return zone ? zone.id : '';
+		var dev = devicesById[String(hostId).slice(5)];
+		var z = findZone(dev, zones);
+		return z ? z.id : '';
 	}
 
 	function pairService(entry) {
 		var raw = entry.policy ? String(entry.policy.service || '') : (entry.flow ? String(entry.flow.service || '') : '');
-		var value = raw.toLowerCase();
-		return value === 'any' || value === '' ? '' : value;
+		var v = raw.toLowerCase();
+		return (v === 'any' || !v) ? '' : v;
 	}
 
 	function aggregatePairs(entries) {
 		var map = {};
 		entries.forEach(function (entry) {
 			var key = entry.from + '\u0000' + entry.to + '\u0000' + entry.action;
-			if (!map[key]) map[key] = { from: entry.from, to: entry.to, action: entry.action, count: 0, services: [], names: [] };
-			var pair = map[key];
+			var pair = map[key] || (map[key] = { from: entry.from, to: entry.to, action: entry.action, count: 0, services: [], names: [] });
 			pair.count += 1;
-			var service = pairService(entry);
-			if (service && pair.services.indexOf(service) < 0) pair.services.push(service);
-			var name = entry.policy ? (entry.policy.name || entry.policy.id) : (entry.flow ? entry.flow.detail : '');
-			if (name) pair.names.push(name);
+			var svc = pairService(entry);
+			if (svc && pair.services.indexOf(svc) < 0) pair.services.push(svc);
+			var nm = entry.policy ? (entry.policy.name || entry.policy.id) : (entry.flow ? entry.flow.detail : '');
+			if (nm && pair.names.indexOf(nm) < 0) pair.names.push(nm);
 		});
-		return Object.keys(map).map(function (key) { return map[key]; });
+		return Object.keys(map).map(function (k) { return map[k]; });
 	}
 
 	function edgeLine(from, to) {
 		var dx = to.x - from.x, dy = to.y - from.y;
-		var distance = Math.sqrt(dx * dx + dy * dy) || 1;
-		var ux = dx / distance, uy = dy / distance;
-		var midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
-		/* Deterministic bow side: A→B and B→A curve apart instead of overlapping. */
+		var dist = Math.hypot(dx, dy) || 1;
 		var side = String(from.id || '') < String(to.id || '') ? 1 : -1;
-		var curve = Math.min(56, Math.max(0, distance * 0.13)) * side;
-		var cx = midX - uy * curve, cy = midY + ux * curve;
-		var fr = from.r || 6, tr = to.r || 6;
-		var fx = from.x + ux * fr, fy = from.y + uy * fr;
-		var tx = to.x - ux * tr, ty = to.y - uy * tr;
+		var bow = Math.min(50, Math.max(14, dist * 0.12)) * side;
+		var cx = (from.x + to.x) * 0.5 - (dy / dist) * bow;
+		var cy = (from.y + to.y) * 0.5 + (dx / dist) * bow;
+		var sd = Math.hypot(cx - from.x, cy - from.y) || 1, fr = (from.r || 6) + 2.5;
+		var fx = from.x + ((cx - from.x) / sd) * fr, fy = from.y + ((cy - from.y) / sd) * fr;
+		var td = Math.hypot(to.x - cx, to.y - cy) || 1, tr = (to.r || 6) + 3.5;
+		var tx = to.x - ((to.x - cx) / td) * tr, ty = to.y - ((to.y - cy) / td) * tr;
 		return 'M' + fx.toFixed(1) + ' ' + fy.toFixed(1) + ' Q' + cx.toFixed(1) + ' ' + cy.toFixed(1) + ' ' + tx.toFixed(1) + ' ' + ty.toFixed(1);
 	}
 
-	function stressDevices(zones, count) {
-		var result = [];
+	function layoutZones(count) {
+		if (count <= 1) return [{ x: 500, y: 365, r: 84 }];
+		if (count === 2) return [{ x: 300, y: 345, r: 76 }, { x: 700, y: 345, r: 76 }];
+		if (count === 3) return [{ x: 255, y: 248, r: 68 }, { x: 745, y: 248, r: 68 }, { x: 500, y: 452, r: 68 }];
+		if (count === 4) return [
+			{ x: 265, y: 232, r: 64 }, { x: 735, y: 232, r: 64 },
+			{ x: 265, y: 452, r: 64 }, { x: 735, y: 452, r: 64 }
+		];
+		var out = [], r = Math.max(44, Math.min(58, Math.round(224 / Math.sqrt(count))));
 		for (var i = 0; i < count; i++) {
-			var zone = zones[i % zones.length];
-			var third = String(zone.cidr || '').split('.')[2] || '0';
-			var host = 10 + Math.floor(i / zones.length);
-			result.push({
+			var a = -Math.PI / 2 + (i * Math.PI * 2 / count);
+			out.push({ x: Math.round(500 + Math.cos(a) * 320), y: Math.round(350 + Math.sin(a) * 172), r: r });
+		}
+		return out;
+	}
+
+	function stressDevices(zones, count) {
+		var out = [];
+		for (var i = 0; i < count; i++) {
+			var z = zones[i % zones.length];
+			var third = String(z.cidr || '').split('.')[2] || '0';
+			var pad = ('00' + (i + 1)).slice(-3);
+			out.push({
 				id: 'stress-' + (i + 1),
-				name: 'Client ' + padded(i + 1),
-				ip: '192.168.' + third + '.' + host,
-				mac: '02:00:0a' + padded(i + 1) + ':11:22:33',
-				network: zone.network,
-				zone: zone.id,
+				name: 'Client ' + pad,
+				ip: '192.168.' + third + '.' + (10 + Math.floor(i / zones.length)),
+				mac: '02:00:0a:' + pad.slice(0, 2) + ':' + pad.slice(1) + ':33',
+				network: z.network,
+				zone: z.id,
 				stress: true
 			});
 		}
-		return result;
+		return out;
 	}
 
-	function endpointNode(endpoint, nodesById, ensureSpecial) {
-		if (!endpoint) return null;
-		if (typeof endpoint === 'string') return nodesById[endpoint] ? endpoint : null;
-		if (endpoint.type === 'zone') return nodesById['zone:' + endpoint.id] ? 'zone:' + endpoint.id : null;
-		if (endpoint.type === 'device') return nodesById['host:' + endpoint.id] ? 'host:' + endpoint.id : null;
-		if (isSpecialType(endpoint.type)) return ensureSpecial(endpoint.type);
+	function endpointNode(ep, nodesById, ensureSpecial) {
+		if (!ep) return null;
+		if (typeof ep === 'string') return nodesById[ep] ? ep : null;
+		if (ep.type === 'zone') return nodesById['zone:' + ep.id] ? 'zone:' + ep.id : null;
+		if (ep.type === 'device') return nodesById['host:' + ep.id] ? 'host:' + ep.id : null;
+		if (SPECIAL_TYPES[String(ep.type || '')]) return ensureSpecial(ep.type);
 		return null;
 	}
 
@@ -133,283 +143,328 @@
 		var stress = options.stress === true;
 		var rawZones = Array.isArray(options.zones) ? options.zones.slice() : [];
 		var zones = rawZones.length ? rawZones : (stress ? DEFAULT_ZONES.slice() : []);
-		var reportedDevices = Array.isArray(options.devices) ? options.devices.slice() : [];
-		var requestedCount = Number(options.stressCount);
-		var stressCount = isFinite(requestedCount) && requestedCount > 0 ? Math.floor(requestedCount) : 512;
-		var devices = stress ? stressDevices(zones, stressCount) : reportedDevices;
-		var hasUnassigned = devices.some(function (device) { return !findZone(device, zones); });
-		if (hasUnassigned) zones.push({ id: 'unassigned', name: 'Unassigned', cidr: 'No segment', network: '', isolation: true, trust: 'Unknown' });
+		var reqCount = Number(options.stressCount);
+		var stressCount = isFinite(reqCount) && reqCount > 0 ? Math.floor(reqCount) : 512;
+		var rawDevices = stress ? stressDevices(zones, stressCount) : (Array.isArray(options.devices) ? options.devices : []);
 
-		var nodes = [];
-		var nodesById = {};
-		function addNode(node) {
-			if (!nodesById[node.id]) {
-				nodesById[node.id] = node;
-				nodes.push(node);
-			}
-			return nodesById[node.id];
+		var devices = [], devicesById = {};
+		rawDevices.forEach(function (d, idx) {
+			if (!d) return;
+			var id = String(d.id != null ? d.id : (d.mac || ('dev-' + idx)));
+			if (devicesById[id]) return;
+			var copy = Object.assign({}, d, { id: id });
+			devicesById[id] = copy;
+			devices.push(copy);
+		});
+
+		if (devices.some(function (d) { return !findZone(d, zones); })) {
+			zones.push({ id: 'unassigned', name: 'Unassigned', cidr: 'No segment', network: '', isolation: true, trust: 'Restricted' });
 		}
 
-		var GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+		var nodes = [], nodesById = {};
+		function addNode(n) {
+			if (!nodesById[n.id]) { nodesById[n.id] = n; nodes.push(n); }
+			return nodesById[n.id];
+		}
+
 		var zoneHosts = {};
-		devices.forEach(function (device) {
-			var zone = findZone(device, zones) || zones.filter(function (item) { return item.id === 'unassigned'; })[0];
-			if (!zone) return;
-			zoneHosts[zone.id] = zoneHosts[zone.id] || [];
-			zoneHosts[zone.id].push(device);
+		devices.forEach(function (d) {
+			var z = findZone(d, zones) || zones[zones.length - 1];
+			if (!z) return;
+			(zoneHosts[z.id] = zoneHosts[z.id] || []).push(d);
 		});
-		var zonePositions = [
-			{ x: 280, y: 195 }, { x: 720, y: 195 },
-			{ x: 280, y: 465 }, { x: 720, y: 465 }
-		];
-		zones.forEach(function (zone, index) {
-			var position = zonePositions[index];
-			if (!position) {
-				var angle = -Math.PI / 2 + (index * Math.PI * 2 / zones.length);
-				position = { x: 500 + Math.cos(angle) * 230, y: 330 + Math.sin(angle) * 160 };
-			}
-			addNode({ id: 'zone:' + zone.id, kind: 'zone', zone: zone, x: position.x, y: position.y, r: 64, hostCount: (zoneHosts[zone.id] || []).length });
+
+		var slots = layoutZones(zones.length);
+		zones.forEach(function (z, i) {
+			var slot = slots[i];
+			addNode({
+				id: 'zone:' + z.id, kind: 'zone', zone: z,
+				x: slot.x, y: slot.y, r: slot.r,
+				hostCount: (zoneHosts[z.id] || []).length
+			});
 		});
-		Object.keys(zoneHosts).forEach(function (zoneId) {
-			var zoneNode = nodesById['zone:' + zoneId];
-			var hosts = zoneHosts[zoneId];
-			if (!zoneNode) return;
-			var minSpacing = stress ? 5.2 : 11;
-			var maxR = stress ? 54 : 50;
-			/* Adaptive spread: few hosts stretch to fill the circle; dense zones
-			   keep the safe minimum spacing so dots never overlap. */
-			var spacing = Math.max(minSpacing, maxR / Math.sqrt(Math.max(1, hosts.length - 1) || 1));
-			hosts.forEach(function (device, index) {
-				var r = index === 0 ? 0 : Math.min(maxR, spacing * Math.sqrt(index));
-				var angle = index * GOLDEN_ANGLE;
+
+		var GOLDEN = Math.PI * (3 - Math.sqrt(5));
+		Object.keys(zoneHosts).forEach(function (zid) {
+			var zn = nodesById['zone:' + zid];
+			var hosts = zoneHosts[zid];
+			if (!zn) return;
+			var maxR = Math.max(12, zn.r - (stress ? 9 : 16));
+			var minSp = stress ? 4.6 : 12.5;
+			var spacing = Math.max(minSp, maxR / Math.sqrt(Math.max(1, hosts.length) + 0.6));
+			hosts.forEach(function (dev, i) {
+				var rad = hosts.length === 1 ? 0 : Math.min(maxR, spacing * Math.sqrt(i + 0.35));
+				var ang = i * GOLDEN;
 				addNode({
-					id: 'host:' + device.id,
-					kind: 'host',
-					device: device,
-					r: stress ? 3.5 : 5,
-					x: zoneNode.x + Math.cos(angle) * r,
-					y: zoneNode.y + Math.sin(angle) * r
+					id: 'host:' + dev.id, kind: 'host', device: dev, zoneId: zid,
+					r: stress ? 3.3 : 5,
+					x: zn.x + Math.cos(ang) * rad,
+					y: zn.y + Math.sin(ang) * rad
 				});
 			});
 		});
 
-		var specialPosition = {
-			internet: { x: 500, y: 50, label: 'Internet / WAN' },
-			router: { x: 500, y: 315, label: 'Router services' }
+		var routerY = zones.length === 1 ? 212 : (zones.length === 3 ? 332 : 342);
+		var specialMeta = {
+			internet: { x: 500, y: 66, r: 24, label: 'Internet / WAN' },
+			router:   { x: 500, y: routerY, r: 21, label: 'Router services' }
 		};
 		function ensureSpecial(kind) {
-			var position = specialPosition[kind] || { x: 500, y: 315, label: kind };
-			return addNode({ id: kind, kind: 'special', special: kind, label: position.label, x: position.x, y: position.y, r: 24 }).id;
+			var m = specialMeta[kind] || { x: 500, y: 332, r: 21, label: kind };
+			return addNode({ id: kind, kind: 'special', special: kind, label: m.label, x: m.x, y: m.y, r: m.r }).id;
 		}
-			/* Aggregate endpoints expand onto concrete zones so the map shows real
-			   places instead of abstract bubbles. 'private' -> every zone except the
-			   source (isolation semantics). 'internal' -> [] (implied infrastructure). */
-			function expandEndpoint(endpoint, sourceEndpoint) {
-				if (!endpoint) return [];
-				if (endpoint.type === 'private') {
-					var srcId = sourceEndpoint && sourceEndpoint.type === 'zone' ? sourceEndpoint.id : null;
-					return zones.filter(function (z) { return z.id !== srcId && z.id !== 'unassigned'; })
-						.map(function (z) { return 'zone:' + z.id; })
-						.filter(function (id) { return nodesById[id]; });
-				}
-				if (endpoint.type === 'internal') return [];
-				var one = endpointNode(endpoint, nodesById, ensureSpecial);
-				return one ? [one] : [];
-			}
 
-		/* Edge model: segment-level arrows for zone/special-to-zone/special policy,
-		 * device lines only for rules that target a specific device (exceptions),
-		 * plus observed flows that are not already implied by a segment arrow. */
-		var zoneEdges = [];
-		var zoneEdgeSeen = {};
-		var exceptionEntries = [];
-		var observedEntries = [];
-		(Array.isArray(options.policies) ? options.policies : []).forEach(function (policy) {
-			var action = String(policy.action || '').toLowerCase();
+		function expandEndpoint(ep, srcEp) {
+			if (!ep) return [];
+			if (ep.type === 'private') {
+				var srcId = srcEp && srcEp.type === 'zone' ? srcEp.id : null;
+				return zones.filter(function (z) { return z.id !== srcId && z.id !== 'unassigned'; })
+					.map(function (z) { return 'zone:' + z.id; })
+					.filter(function (id) { return nodesById[id]; });
+			}
+			if (ep.type === 'internal') return [];
+			var one = endpointNode(ep, nodesById, ensureSpecial);
+			return one ? [one] : [];
+		}
+
+		var zoneEdges = [], zoneEdgeSeen = {}, exceptionEntries = [], observedEntries = [], intraPolicies = {};
+		var blockedHosts = {};
+
+		(Array.isArray(options.policies) ? options.policies : []).forEach(function (pol) {
+			if (!pol) return;
+			var action = String(pol.action || '').toLowerCase();
 			if (action !== 'allow' && action !== 'deny') return;
-				var froms = expandEndpoint(policy.source, null);
-				var tos = expandEndpoint(policy.destination, policy.source);
-				froms.forEach(function (from) {
-					tos.forEach(function (to) {
-						if (!from || !to || from === to) return;
-						var fromLevel = String(from).indexOf('host:') !== 0;
-						var toLevel = String(to).indexOf('host:') !== 0;
-						if (fromLevel && toLevel) {
-							var key = from + '\u0000' + to + '\u0000' + action;
-							if (!zoneEdgeSeen[key]) {
-								zoneEdgeSeen[key] = true;
-								zoneEdges.push({ from: from, to: to, action: action, policy: policy });
-							}
-						} else {
-							exceptionEntries.push({ from: from, to: to, action: action, policy: policy });
+			var froms = expandEndpoint(pol.source, null);
+			var tos = expandEndpoint(pol.destination, pol.source);
+			froms.forEach(function (from) {
+				tos.forEach(function (to) {
+					if (!from || !to) return;
+					if (from === to) {
+						(intraPolicies[from] = intraPolicies[from] || []).push({ action: action, name: pol.name || pol.service || action });
+						return;
+					}
+					var fromSeg = String(from).indexOf('host:') !== 0;
+					var toSeg = String(to).indexOf('host:') !== 0;
+					if (fromSeg && toSeg) {
+						var k = from + '\u0000' + to + '\u0000' + action;
+						if (!zoneEdgeSeen[k]) {
+							zoneEdgeSeen[k] = true;
+							zoneEdges.push({ from: from, to: to, action: action, policy: pol });
 						}
-					});
+					} else {
+						if (action === 'deny' && String(from).indexOf('host:') === 0) blockedHosts[from] = true;
+						exceptionEntries.push({ from: from, to: to, action: action, policy: pol });
+					}
 				});
+			});
 		});
+
 		(Array.isArray(options.observed) ? options.observed : []).forEach(function (flow) {
+			if (!flow) return;
 			var from = endpointNode({ type: 'device', id: flow.source }, nodesById, ensureSpecial);
-			var destination = flow.destination === 'internet' ? { type: 'internet' } : { type: 'device', id: flow.destination };
-			var to = endpointNode(destination, nodesById, ensureSpecial);
-			var status = String(flow.status || '').toLowerCase();
-			var action = status === 'allowed' || status === 'allow' ? 'allow' : (status === 'blocked' || status === 'deny' ? 'deny' : 'unknown');
+			var dest = flow.destination === 'internet' ? { type: 'internet' } : { type: 'device', id: flow.destination };
+			var to = endpointNode(dest, nodesById, ensureSpecial);
+			var st = String(flow.status || '').toLowerCase();
+			var action = (st === 'allowed' || st === 'allow') ? 'allow' : ((st === 'blocked' || st === 'deny') ? 'deny' : 'unknown');
 			if (!from || !to || from === to || action === 'unknown') return;
-			/* Suppress observed flows already implied by a segment-level rule so the
-			 * map stays quiet; keep cross-segment evidence and intra-segment flows. */
-			var fromSeg = from, toSeg = to;
-			if (String(from).indexOf('host:') === 0) {
-				var fromZoneId = zoneHostOf(from, devices, zones);
-				if (fromZoneId) fromSeg = 'zone:' + fromZoneId;
-			}
-			if (String(to).indexOf('host:') === 0) {
-				var toZoneId = zoneHostOf(to, devices, zones);
-				if (toZoneId) toSeg = 'zone:' + toZoneId;
-			}
-			if (fromSeg !== toSeg && zoneEdgeSeen[fromSeg + '\u0000' + toSeg + '\u0000' + action]) return;
+			var fSeg = String(from).indexOf('host:') === 0 ? ('zone:' + zoneHostOf(from, devicesById, zones)) : from;
+			var tSeg = String(to).indexOf('host:') === 0 ? ('zone:' + zoneHostOf(to, devicesById, zones)) : to;
+			if (fSeg !== tSeg && zoneEdgeSeen[fSeg + '\u0000' + tSeg + '\u0000' + action]) return;
 			observedEntries.push({ from: from, to: to, action: action, flow: flow });
 		});
-		var edges = aggregatePairs(exceptionEntries);
-		var observedEdges = aggregatePairs(observedEntries);
 
 		return {
-			width: 1000,
-			height: 660,
-			zones: zones,
-			devices: devices,
-			nodes: nodes,
+			width: 1000, height: 620,
+			zones: zones, devices: devices, nodes: nodes,
 			zoneEdges: zoneEdges,
-			edges: edges,
-			observedEdges: observedEdges,
+			edges: aggregatePairs(exceptionEntries),
+			observedEdges: aggregatePairs(observedEntries),
+			intraPolicies: intraPolicies,
+			blockedHosts: blockedHosts,
 			clientCount: devices.length,
 			stress: stress
 		};
 	}
 
+	function drawHubGlyph(parent, kind, cx, cy) {
+		var g = svg('g', {
+			'class': 'map-graph-hub-ico',
+			transform: 'translate(' + (cx - 9).toFixed(1) + ' ' + (cy - 9).toFixed(1) + ') scale(0.75)'
+		});
+		if (kind === 'internet') {
+			g.appendChild(svg('circle', { cx: 12, cy: 12, r: 8.5 }));
+			g.appendChild(svg('ellipse', { cx: 12, cy: 12, rx: 3.8, ry: 8.5 }));
+			g.appendChild(svg('path', { d: 'M3.5 12h17' }));
+		} else {
+			g.appendChild(svg('rect', { x: 3, y: 9, width: 18, height: 8, rx: 2 }));
+			g.appendChild(svg('path', { d: 'M8 9V5M16 9V5' }));
+			g.appendChild(svg('circle', { cx: 7.5, cy: 13, r: 1.1, 'class': 'dot-fill' }));
+			g.appendChild(svg('circle', { cx: 11.5, cy: 13, r: 1.1, 'class': 'dot-fill' }));
+		}
+		parent.appendChild(g);
+	}
+
 	function render(container, options) {
+		if (!container) return null;
 		options = options || {};
 		var started = clock();
 		var graph = build(options);
 		var labels = options.labels || {};
+		var uid = ++graphSerial;
+
 		var root = svg('svg', {
 			'class': 'map-graph-svg',
 			viewBox: '0 0 ' + graph.width + ' ' + graph.height,
 			preserveAspectRatio: 'xMidYMid meet',
-			role: 'img',
+			role: 'group',
 			'aria-label': labels.graph || 'Network topology graph'
 		});
+
 		var defs = svg('defs');
+		var gridId = 'wb-map-grid-' + uid;
+		var allowId = 'wb-map-allow-' + uid;
+		var denyId = 'wb-map-deny-' + uid;
+
 		defs.appendChild(svg('style', { type: 'text/css' })).textContent =
-			'.map-graph-node-zone .map-graph-circle { fill: var(--wb-accent-soft); stroke: var(--wb-accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .55; }' +
-			'.map-graph-node-zone.isolated .map-graph-circle { stroke: var(--wb-warn); }' +
-			'.map-graph-node-special .map-graph-circle { fill: var(--wb-surface); stroke: var(--wb-text-soft); stroke-width: 1.5; vector-effect: non-scaling-stroke; }' +
-			'.map-graph-node-host .map-graph-circle { fill: var(--wb-good); stroke: none; }' +
-			'.map-graph-node-host.stress .map-graph-circle { fill: var(--wb-good); opacity: .55; }' +
-			'.map-graph-node-host:hover .map-graph-circle, .map-graph-node-host:focus .map-graph-circle { fill: var(--wb-text); }' +
-			'.map-graph-zone-label, .map-graph-special-label, .map-graph-zone-meta { font-family: var(--wb-font); fill: var(--wb-text); pointer-events: none; }' +
-			'.map-graph-zone-label { font-size: 13.5px; font-weight: 700; }' +
-			'.map-graph-zone-meta { font-size: 9.5px; fill: var(--wb-text-soft); }' +
-			'.map-graph-special-label { font-size: 11px; font-weight: 700; }' +
-			'.map-graph-empty { font-family: var(--wb-font); font-size: 14px; fill: var(--wb-text-soft); }' +
-			'.map-graph-tip { position: absolute; z-index: 6; display: none; max-width: 272px; padding: 10px 12px; border: 1px solid var(--wb-border); border-radius: 10px; background: var(--wb-surface); color: var(--wb-text); font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.35); pointer-events: none; }' +
-			'.map-graph-tip strong { display: block; font-size: 12.5px; margin-bottom: 3px; }' +
-			'.map-graph-tip .muted { color: var(--wb-text-soft); font-size: 11px; }' +
-			'.map-graph-tip ul { margin: 7px 0 0; padding-left: 15px; display: grid; gap: 3px; }' +
-			'.map-graph-tip .tip-row { display: flex; justify-content: space-between; gap: 14px; color: var(--wb-text-soft); font-size: 11px; margin-top: 4px; }' +
-			'.map-graph-tip .tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; vertical-align: 1px; }' +
-			'.map-graph-tip .tag.allow { background: rgba(63,174,106,.18); color: var(--wb-good); }' +
-			'.map-graph-tip .tag.deny { background: rgba(224,82,82,.18); color: var(--wb-bad); }' +
-			'.map-graph-tip .tag.observed { background: rgba(240,160,32,.18); color: var(--wb-warn); }';
-		var allowMarkerId = 'wb-map-arrow-allow-' + (++graphSerial);
-		var denyMarkerId = 'wb-map-arrow-deny-' + graphSerial;
-		/* Fixed-size arrowheads (userSpaceOnUse) so they do not scale with stroke width. */
-		var allowMarker = svg('marker', { id: allowMarkerId, markerWidth: 9, markerHeight: 8, refX: 7.5, refY: 4, orient: 'auto', markerUnits: 'userSpaceOnUse' });
-		allowMarker.appendChild(svg('path', { d: 'M0,0 L8,4 L0,8 z', 'class': 'map-graph-arrow allow' }));
-		var denyMarker = svg('marker', { id: denyMarkerId, markerWidth: 9, markerHeight: 8, refX: 7.5, refY: 4, orient: 'auto', markerUnits: 'userSpaceOnUse' });
-		denyMarker.appendChild(svg('path', { d: 'M0,0 L8,4 L0,8 z', 'class': 'map-graph-arrow deny' }));
-		defs.appendChild(allowMarker);
-		defs.appendChild(denyMarker);
+			'.map-graph-grid-dot{fill:var(--wb-text-mute,var(--wb-text-soft));opacity:.16}' +
+			'.map-graph-node-zone .map-graph-circle{fill:var(--wb-accent-soft,rgba(128,128,128,.1));stroke:var(--wb-accent);stroke-width:1.5;vector-effect:non-scaling-stroke;fill-opacity:.72;transition:stroke-width .15s,fill-opacity .15s}' +
+			'.map-graph-node-zone.trusted .map-graph-circle{stroke:var(--wb-good-fill,var(--wb-good));fill:var(--wb-good-soft,rgba(31,157,97,.09))}' +
+			'.map-graph-node-zone.isolated .map-graph-circle{stroke:var(--wb-warn-fill,var(--wb-warn));fill:var(--wb-warn-soft,rgba(217,143,0,.08))}' +
+			'.map-graph-zone-ring{fill:none;stroke:var(--wb-warn-fill,var(--wb-warn));stroke-width:1;stroke-dasharray:4 4;opacity:.55;vector-effect:non-scaling-stroke;pointer-events:none}' +
+			'.map-graph-node-special .map-graph-halo{fill:var(--wb-surface);fill-opacity:.5;stroke:var(--wb-border-strong,var(--wb-border));stroke-width:1;vector-effect:non-scaling-stroke}' +
+			'.map-graph-node-special .map-graph-circle{fill:var(--wb-surface);stroke:var(--wb-accent);stroke-width:1.6;vector-effect:non-scaling-stroke}' +
+			'.map-graph-hub-ico{fill:none;stroke:var(--wb-accent-text,var(--wb-accent));stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}' +
+			'.map-graph-hub-ico .dot-fill{fill:var(--wb-accent-text,var(--wb-accent));stroke:none}' +
+			'.map-graph-node-host .map-graph-circle{fill:var(--wb-good-fill,var(--wb-good));stroke:var(--wb-surface);stroke-width:1.4;transition:fill .14s}' +
+			'.map-graph-node-host.blocked .map-graph-circle{fill:var(--wb-bad-fill,var(--wb-bad))}' +
+			'.map-graph-node-host.stress .map-graph-circle{stroke:none;opacity:.65}' +
+			'.map-graph-node-host:hover .map-graph-circle,.map-graph-node-host:focus .map-graph-circle,.map-graph-node-host.selected .map-graph-circle{fill:var(--wb-text);stroke:var(--wb-accent);stroke-width:2}' +
+			'.map-graph-zone-label,.map-graph-special-label,.map-graph-zone-meta{font-family:var(--wb-font);fill:var(--wb-text);pointer-events:none;paint-order:stroke fill;stroke:var(--wb-bg}' +
+			'.map-graph-node-zone.trusted .map-graph-circle{stroke:var(--wb-good-fill,var(--wb-good));fill:var(--wb-good-soft,rgba(31,157,97,.09))}' +
+			'.map-graph-node-zone.isolated .map-graph-circle{stroke:var(--wb-warn-fill,var(--wb-warn));fill:var(--wb-warn-soft,rgba(217,143,0,.08))}' +
+			'.map-graph-zone-ring{fill:none;stroke:var(--wb-warn-fill,var(--wb-warn));stroke-dasharray:4 4;opacity:.55;vector-effect:non-scaling-stroke;pointer-events:none}' +
+			'.map-graph-node-special .map-graph-halo{fill:var(--wb-surface);fill-opacity:.5;stroke:var(--wb-border-strong,var(--wb-border));vector-effect:non-scaling-stroke}' +
+			'.map-graph-node-special .map-graph-circle{fill:var(--wb-surface);stroke:var(--wb-accent);stroke-width:1.6;vector-effect:non-scaling-stroke}' +
+			'.map-graph-hub-ico{fill:none;stroke:var(--wb-accent-text,var(--wb-accent));stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}' +
+			'.map-graph-hub-ico .dot-fill{fill:var(--wb-accent-text,var(--wb-accent));stroke:none}' +
+			'.map-graph-node-host .map-graph-circle{fill:var(--wb-good-fill,var(--wb-good));stroke:var(--wb-surface);stroke-width:1.4}' +
+			'.map-graph-node-host.blocked .map-graph-circle{fill:var(--wb-bad-fill,var(--wb-bad))}' +
+			'.map-graph-node-host.stress .map-graph-circle{stroke:none;opacity:.65}' +
+			'.map-graph-node-host:hover .map-graph-circle,.map-graph-node-host:focus .map-graph-circle,.map-graph-node-host.selected .map-graph-circle{fill:var(--wb-text);stroke:var(--wb-accent);stroke-width:2}' +
+			'.map-graph-zone-label,.map-graph-special-label,.map-graph-zone-meta{font-family:var(--wb-font);fill:var(--wb-text);pointer-events:none;paint-order:stroke fill;stroke:var(--wb-bg);stroke-width:4px;stroke-linejoin:round}' +
+			'.map-graph-zone-label{font-size:13px;font-weight:700}' +
+			'.map-graph-zone-meta{font-family:var(--wb-mono,monospace);font-size:10.5px;fill:var(--wb-text-soft)}' +
+			'.map-graph-special-label{font-size:11.5px;font-weight:700}' +
+			'.map-graph-empty{font-family:var(--wb-font);font-size:14px;fill:var(--wb-text-soft)}' +
+			'.map-graph-svg.has-focus .map-graph-edge{opacity:.14}' +
+			'.map-graph-svg.has-focus .map-graph-edge.is-hot{opacity:1}' +
+			'.map-graph-edge-hit{fill:none;stroke:transparent;stroke-width:12;cursor:pointer;vector-effect:non-scaling-stroke}' +
+			'.map-graph-tip{position:absolute;z-index:12;display:none;max-width:280px;padding:10px 12px;border:1px solid var(--wb-border);border-radius:var(--wb-radius-s,10px);background:var(--wb-surface);color:var(--wb-text);font-size:12px;line-height:1.42;box-shadow:var(--wb-shadow-lg,0 12px 32px rgba(0,0,0,.32));pointer-events:none}' +
+			'.map-graph-tip strong{display:block;font-size:12.5px;margin-bottom:2px}' +
+			'.map-graph-tip .muted{color:var(--wb-text-soft);font-size:11px;font-family:var(--wb-mono,monospace)}' +
+			'.map-graph-tip ul{margin:7px 0 0;padding-left:15px;display:grid;gap:3px}' +
+			'.map-graph-tip .tip-row{display:flex;justify-content:space-between;gap:14px;color:var(--wb-text-soft);font-size:11px;margin-top:6px;padding-top:5px;border-top:1px solid var(--wb-border)}' +
+			'.map-graph-tip .tag{display:inline-block;margin-left:5px;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;vertical-align:1px}' +
+			'.map-graph-tip .tag.allow{background:var(--wb-good-soft);color:var(--wb-good)}' +
+			'.map-graph-tip .tag.deny{background:var(--wb-bad-soft);color:var(--wb-bad)}' +
+			'.map-graph-hud{position:absolute;right:10px;bottom:10px;z-index:5;display:inline-flex;gap:3px;padding:3px;border:1px solid var(--wb-border);border-radius:var(--wb-radius-s,8px);background:color-mix(in srgb,var(--wb-surface) 88%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}' +
+			'.map-graph-hud button{width:26px;height:24px;border:0;border-radius:5px;background:transparent;color:var(--wb-text-soft);font:700 12px/1 var(--wb-mono,monospace);cursor:pointer;padding:0;display:grid;place-items:center}' +
+			'.map-graph-hud button:hover{background:var(--wb-surface-2,rgba(128,128,128,.14));color:var(--wb-text)}';
+
+		var pat = svg('pattern', { id: gridId, width: 24, height: 24, patternUnits: 'userSpaceOnUse' });
+		pat.appendChild(svg('circle', { cx: 12, cy: 12, r: 0.9, 'class': 'map-graph-grid-dot' }));
+		defs.appendChild(pat);
+
+		function makeMarker(id, cls) {
+			var m = svg('marker', { id: id, markerWidth: 9, markerHeight: 8, refX: 7.2, refY: 4, orient: 'auto', markerUnits: 'userSpaceOnUse' });
+			m.appendChild(svg('path', { d: 'M0.6,0.8 L8.2,4 L0.6,7.2 L2.3,4 z', 'class': 'map-graph-arrow ' + cls }));
+			return m;
+		}
+		defs.appendChild(makeMarker(allowId, 'allow'));
+		defs.appendChild(makeMarker(denyId, 'deny'));
 		root.appendChild(defs);
-		root.appendChild(svg('rect', { x: 0, y: 0, width: graph.width, height: graph.height, rx: 18, 'class': 'map-graph-bg' }));
+
+		root.appendChild(svg('rect', { x: 0, y: 0, width: graph.width, height: graph.height, rx: 14, 'class': 'map-graph-bg' }));
+		root.appendChild(svg('rect', { x: 0, y: 0, width: graph.width, height: graph.height, rx: 14, fill: 'url(#' + gridId + ')', 'pointer-events': 'none' }));
+
 		var edgeLayer = svg('g', { 'class': 'map-graph-edges' });
 		var nodeLayer = svg('g', { 'class': 'map-graph-nodes' });
-		/* Zoom/pan viewport: everything except the background scales together. */
 		var viewport = svg('g', { 'class': 'map-graph-viewport' });
 		viewport.appendChild(edgeLayer);
 		viewport.appendChild(nodeLayer);
 		root.appendChild(viewport);
 
-		/* --- Zoom & pan ---------------------------------------------------
-		 * Wheel zooms toward the cursor (1×–8×), pointer drag pans,
-		 * double-click resets. Pan is clamped so the graph cannot be lost
-		 * off-canvas. A real drag suppresses the next synthetic click so
-		 * host nodes do not open the inspector after a pan. */
 		var view = { x: 0, y: 0, k: 1 };
-		function applyView() {
-			viewport.setAttribute('transform', 'translate(' + view.x.toFixed(2) + ' ' + view.y.toFixed(2) + ') scale(' + view.k.toFixed(4) + ')');
-		}
 		function clampPan() {
-			if (view.k <= 1) { view.x = 0; view.y = 0; return; }
+			if (view.k <= 1.001) { view.k = 1; view.x = 0; view.y = 0; return; }
 			view.x = Math.min(0, Math.max(graph.width * (1 - view.k), view.x));
 			view.y = Math.min(0, Math.max(graph.height * (1 - view.k), view.y));
 		}
-		function svgPoint(event) {
-			var rect = root.getBoundingClientRect();
-			return {
-				x: (event.clientX - rect.left) * graph.width / Math.max(1, rect.width),
-				y: (event.clientY - rect.top) * graph.height / Math.max(1, rect.height)
-			};
+		function applyView() {
+			viewport.setAttribute('transform', 'translate(' + view.x.toFixed(2) + ' ' + view.y.toFixed(2) + ') scale(' + view.k.toFixed(4) + ')');
+			if (root.style) {
+				root.style.touchAction = view.k > 1.01 ? 'none' : 'pan-y pinch-zoom';
+				root.style.cursor = view.k > 1.01 ? 'grab' : 'default';
+			}
 		}
-		root.addEventListener('wheel', function (event) {
-			event.preventDefault();
-			var point = svgPoint(event);
-			var next = Math.min(8, Math.max(1, view.k * (event.deltaY < 0 ? 1.15 : 1 / 1.15)));
+		function zoomAt(factor, px, py) {
+			var next = Math.min(8, Math.max(1, view.k * factor));
 			var ratio = next / view.k;
-			view.x = point.x - ratio * (point.x - view.x);
-			view.y = point.y - ratio * (point.y - view.y);
+			view.x = px - ratio * (px - view.x);
+			view.y = py - ratio * (py - view.y);
 			view.k = next;
 			clampPan();
 			applyView();
+		}
+		function svgPoint(ev) {
+			var rect = root.getBoundingClientRect();
+			return {
+				x: (ev.clientX - rect.left) * graph.width / Math.max(1, rect.width),
+				y: (ev.clientY - rect.top) * graph.height / Math.max(1, rect.height)
+			};
+		}
+		applyView();
+
+		root.addEventListener('wheel', function (ev) {
+			ev.preventDefault();
+			var pt = svgPoint(ev);
+			zoomAt(ev.deltaY < 0 ? 1.18 : (1 / 1.18), pt.x, pt.y);
 		}, { passive: false });
-		var drag = null;
-		root.addEventListener('pointerdown', function (event) {
-			drag = { sx: event.clientX, sy: event.clientY, vx: view.x, vy: view.y, moved: false };
-			root.style.cursor = 'grabbing';
+
+		var drag = null, suppressClick = false;
+		root.addEventListener('pointerdown', function (ev) {
+			if (view.k <= 1.01) return;
+			drag = { sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y, moved: false };
 			hideTip();
 		});
-		root.addEventListener('pointermove', function (event) {
+		root.addEventListener('pointermove', function (ev) {
 			if (!drag) return;
 			var rect = root.getBoundingClientRect();
-			var dx = (event.clientX - drag.sx) * graph.width / Math.max(1, rect.width);
-			var dy = (event.clientY - drag.sy) * graph.height / Math.max(1, rect.height);
-				if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-					drag.moved = true;
-					/* Capture only once panning actually starts, so plain clicks keep
-					   their original target and host nodes still receive them. */
-					try { root.setPointerCapture(event.pointerId); } catch (e) { /* older engines */ }
-				}
-			if (!drag.moved || view.k <= 1) return;
+			var dx = (ev.clientX - drag.sx) * graph.width / Math.max(1, rect.width);
+			var dy = (ev.clientY - drag.sy) * graph.height / Math.max(1, rect.height);
+			if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+				drag.moved = true;
+				if (root.style) root.style.cursor = 'grabbing';
+				try { root.setPointerCapture(ev.pointerId); } catch (e) {}
+			}
+			if (!drag.moved) return;
 			view.x = drag.vx + dx;
 			view.y = drag.vy + dy;
 			clampPan();
 			applyView();
 		});
-		var suppressClick = false;
-		function endDrag(event) {
-			/* click fires after pointerup, so remember whether the gesture moved
-			   before clearing drag state — otherwise panning would also open hosts. */
+		function endDrag(ev) {
 			suppressClick = !!(drag && drag.moved);
 			drag = null;
-			root.style.cursor = '';
-			/* Release pointer capture so the browser retargets the follow-up click
-			   to the actual element under the pointer (e.g. a host node) instead of
-			   this SVG root, which would swallow host clicks entirely. */
-			if (event && event.pointerId != null) {
-				try { root.releasePointerCapture(event.pointerId); } catch (e) { /* not captured */ }
+			applyView();
+			if (ev && ev.pointerId != null) {
+				try { root.releasePointerCapture(ev.pointerId); } catch (e) {}
 			}
 		}
 		root.addEventListener('pointerup', endDrag);
 		root.addEventListener('pointercancel', endDrag);
-		root.addEventListener('click', function (event) {
-			if (suppressClick) { event.stopPropagation(); event.preventDefault(); suppressClick = false; }
+		root.addEventListener('click', function (ev) {
+			if (suppressClick) { ev.stopPropagation(); ev.preventDefault(); suppressClick = false; }
 		}, true);
 		root.addEventListener('dblclick', function () {
 			view.x = 0; view.y = 0; view.k = 1;
@@ -417,170 +472,249 @@
 		});
 
 		var nodesById = {};
-		graph.nodes.forEach(function (item) { nodesById[item.id] = item; });
+		graph.nodes.forEach(function (n) { nodesById[n.id] = n; });
 		function node(id) { return nodesById[id] || null; }
 
-		var visibleZoneEdges = graph.zoneEdges.filter(function (edge) { return edge.action === 'allow' || options.showDenied === true; });
-		var visibleEdges = graph.edges.filter(function (edge) { return edge.action === 'allow' || options.showDenied === true; });
-		var visibleObservedEdges = graph.observedEdges.filter(function (edge) { return edge.action === 'allow' || options.showDenied === true; });
-		function edgeTitle(edge, observed) {
-			var from = node(edge.from), to = node(edge.to);
-			var fromName = from.zone ? from.zone.name : (from.label || from.id);
-			var toName = to.zone ? to.zone.name : (to.label || to.id);
-			var parts = [ fromName + ' → ' + toName + (edge.action === 'allow' ? ' · allowed' : ' · denied') ];
-			if (edge.services && edge.services.length) parts.push('services: ' + edge.services.join(', '));
-			if (edge.names && edge.names.length) parts.push(edge.names.join(' | '));
-			if (edge.count > 1) parts.push(edge.count + (observed ? ' observed flows' : ' rules'));
-			return parts.join('\n');
+		function endpointName(id) {
+			var it = node(id);
+			if (it) {
+				if (it.zone) return it.zone.name || it.zone.id;
+				if (it.special) return labels[it.special] || it.label || it.id;
+				if (it.device) return it.device.name || it.device.mac || it.device.id;
+			}
+			return String(id);
 		}
-		function drawEdge(edge, observed, zoneEdge) {
-			var from = node(edge.from), to = node(edge.to);
-			if (!from || !to) return;
-			/* Device-involved edges (host↔host or host↔zone) render as thin
-			   dotted lines; segment-level zone arrows stay thick and solid. */
-			var className = 'map-graph-edge' + (zoneEdge ? ' zone-edge' : '') + (observed ? ' observed' : (!zoneEdge ? ' device-edge' : '')) + ' ' + edge.action;
-			var marker = edge.action === 'deny' ? denyMarkerId : allowMarkerId;
-			var path = svg('path', { d: edgeLine(from, to), 'class': className, 'marker-end': 'url(#' + marker + ')' });
-			path.appendChild(svg('title')).textContent = edgeTitle(edge, observed);
-			edgeLayer.appendChild(path);
-		}
-		visibleObservedEdges.forEach(function (edge) { drawEdge(edge, true, false); });
-		visibleEdges.forEach(function (edge) { drawEdge(edge, false, false); });
-		visibleZoneEdges.forEach(function (edge) { drawEdge(edge, false, true); });
 
-		var tooltip = null;
-		var tipVisible = false;
-		function showTip(event, html) {
+		var tooltip = null, tipVisible = false;
+		if (!graph.stress) {
+			if (container.style) container.style.position = 'relative';
+			tooltip = document.createElement('div');
+			tooltip.className = 'map-graph-tip';
+		}
+		function showTip(ev, html) {
 			if (!tooltip) return;
 			tooltip.innerHTML = html;
-			var bounds = container.getBoundingClientRect();
-			var left = event.clientX - bounds.left + 14;
-			var top = event.clientY - bounds.top + 12;
-			var tipW = tooltip.offsetWidth || 220;
-			if (left + tipW > bounds.width - 8) left = Math.max(8, event.clientX - bounds.left - tipW - 12);
-			if (top + (tooltip.offsetHeight || 60) > bounds.height - 8) top = Math.max(8, event.clientY - bounds.top - (tooltip.offsetHeight || 60) - 12);
-			tooltip.style.left = left + 'px';
-			tooltip.style.top = top + 'px';
 			tooltip.style.display = 'block';
 			tipVisible = true;
+			var bounds = container.getBoundingClientRect();
+			if (!bounds.width) return;
+			var tw = tooltip.offsetWidth || 220, th = tooltip.offsetHeight || 64;
+			var left = ev.clientX - bounds.left + 14;
+			var top = ev.clientY - bounds.top + 12;
+			if (left + tw > bounds.width - 8) left = Math.max(8, ev.clientX - bounds.left - tw - 12);
+			if (top + th > bounds.height - 8) top = Math.max(8, ev.clientY - bounds.top - th - 12);
+			tooltip.style.left = left + 'px';
+			tooltip.style.top = top + 'px';
 		}
 		function hideTip() {
 			if (tooltip && tipVisible) { tooltip.style.display = 'none'; tipVisible = false; }
 		}
-		function bindTip(group, html) {
-			if (!tooltip) return;
-			group.addEventListener('mouseenter', function (event) { showTip(event, html); });
-			group.addEventListener('mousemove', function (event) { if (tipVisible) showTip(event, html); });
-			group.addEventListener('mouseleave', hideTip);
+
+		var renderedEdges = [];
+		function focusEntity(entityId, singleEdge) {
+			if (graph.stress) return;
+			var anyMatch = false;
+			renderedEdges.forEach(function (rec) {
+				var hot = singleEdge ? (rec === singleEdge) :
+					(rec.edge.from === entityId || rec.edge.to === entityId);
+				rec.path.classList.toggle('is-hot', hot);
+				if (hot) anyMatch = true;
+			});
+			root.classList.toggle('has-focus', anyMatch);
 		}
-		function endpointName(id) {
-			var item = node(id);
-			if (item) return item.zone ? item.zone.name : (item.label || item.id);
-			if (String(id).indexOf('host:') === 0) {
-				var device = graph.devices.filter(function (d) { return ('host:' + d.id) === id; })[0];
-				return device ? (device.name || device.mac || device.id) : id;
+		function clearFocus() {
+			root.classList.remove('has-focus');
+			renderedEdges.forEach(function (rec) { rec.path.classList.remove('is-hot'); });
+		}
+
+		function bindInteractive(el, htmlFn, focusId, edgeRec) {
+			if (graph.stress) return;
+			el.addEventListener('mouseenter', function (ev) {
+				focusEntity(focusId, edgeRec);
+				if (htmlFn) showTip(ev, htmlFn());
+			});
+			el.addEventListener('mousemove', function (ev) {
+				if (tipVisible && htmlFn) showTip(ev, htmlFn());
+			});
+			el.addEventListener('mouseleave', function () {
+				clearFocus();
+				hideTip();
+			});
+		}
+
+		var visibleZoneEdges = graph.zoneEdges.filter(function (e) { return e.action === 'allow' || options.showDenied === true; });
+		var visibleEdges = graph.edges.filter(function (e) { return e.action === 'allow' || options.showDenied === true; });
+		var visibleObservedEdges = graph.observedEdges.filter(function (e) { return e.action === 'allow' || options.showDenied === true; });
+
+		function edgeTipHtml(edge, observed) {
+			var tag = '<span class="tag ' + (edge.action === 'allow' ? 'allow' : 'deny') + '">' +
+				(observed ? (edge.action === 'allow' ? 'observed allow' : 'observed block') : (edge.action === 'allow' ? 'allowed' : 'denied')) + '</span>';
+			var rows = ['<strong>' + esc(endpointName(edge.from)) + ' → ' + esc(endpointName(edge.to)) + ' ' + tag + '</strong>'];
+			if (edge.services && edge.services.length) rows.push('<div class="muted">Service: ' + esc(edge.services.join(', ')) + '</div>');
+			if (edge.names && edge.names.length) rows.push('<div class="muted">' + esc(edge.names.slice(0, 3).join(' · ')) + '</div>');
+			return rows.join('');
+		}
+
+		function drawEdge(edge, observed, zoneEdge) {
+			var from = node(edge.from), to = node(edge.to);
+			if (!from || !to) return;
+			var d = edgeLine(from, to);
+			var cls = 'map-graph-edge' + (zoneEdge ? ' zone-edge' : '') + (observed ? ' observed' : (!zoneEdge ? ' device-edge' : '')) + ' ' + edge.action;
+			var marker = edge.action === 'deny' ? denyId : allowId;
+			var path = svg('path', { d: d, 'class': cls, 'marker-end': 'url(#' + marker + ')' });
+			edgeLayer.appendChild(path);
+			var rec = { edge: edge, path: path };
+			renderedEdges.push(rec);
+			if (!graph.stress) {
+				var hit = svg('path', { d: d, 'class': 'map-graph-edge-hit' });
+				bindInteractive(hit, function () { return edgeTipHtml(edge, observed); }, null, rec);
+				edgeLayer.appendChild(hit);
 			}
-			return id;
 		}
-		function deviceTipHtml(device) {
-			var zone = findZone(device, graph.zones);
-			var rows = [];
-			rows.push('<strong>' + esc(device.name || device.mac || device.id) + '</strong>');
-			rows.push('<div class="muted">' + esc([device.ip, device.mac].filter(Boolean).join(' · ')) + (zone ? ' · ' + esc(zone.name) : '') + '</div>');
-			var own = graph.edges.filter(function (edge) {
-				return String(edge.from) === 'host:' + device.id || String(edge.to) === 'host:' + device.id;
+		visibleObservedEdges.forEach(function (e) { drawEdge(e, true, false); });
+		visibleEdges.forEach(function (e) { drawEdge(e, false, false); });
+		visibleZoneEdges.forEach(function (e) { drawEdge(e, false, true); });
+
+		function deviceTipHtml(dev) {
+			var z = findZone(dev, graph.zones);
+			var rows = [
+				'<strong>' + esc(dev.name || dev.mac || dev.id) + '</strong>',
+				'<div class="muted">' + esc([dev.ip, dev.mac].filter(Boolean).join(' · ')) + (z ? ' · ' + esc(z.name) : '') + '</div>'
+			];
+			var lines = graph.edges.concat(graph.observedEdges).filter(function (e) {
+				return e.from === 'host:' + dev.id || e.to === 'host:' + dev.id;
 			});
-			var flowObs = graph.observedEdges.filter(function (edge) {
-				return String(edge.from) === 'host:' + device.id || String(edge.to) === 'host:' + device.id;
-			});
-			var lines = own.concat(flowObs);
 			if (lines.length) {
 				rows.push('<ul>');
-				lines.forEach(function (edge) {
-					var outgoing = String(edge.from) === 'host:' + device.id;
-					var other = outgoing ? endpointName(edge.to) : endpointName(edge.from);
-					var service = (edge.services && edge.services.length) ? ' · ' + esc(edge.services.join(', ')) : '';
-					rows.push('<li>' + (outgoing ? '→' : '←') + ' ' + esc(other) + service + ' <span class="tag ' + (edge.action === 'allow' ? 'allow' : 'deny') + '">' + (edge.action === 'allow' ? 'allowed' : 'denied') + '</span></li>');
+				lines.forEach(function (e) {
+					var out = e.from === 'host:' + dev.id;
+					var other = out ? endpointName(e.to) : endpointName(e.from);
+					var svc = (e.services && e.services.length) ? ' · ' + esc(e.services.join(', ')) : '';
+					rows.push('<li>' + (out ? '→ ' : '← ') + esc(other) + svc + ' <span class="tag ' + (e.action === 'allow' ? 'allow' : 'deny') + '">' + (e.action === 'allow' ? 'allowed' : 'denied') + '</span></li>');
 				});
 				rows.push('</ul>');
 			}
 			return rows.join('');
 		}
-		function zoneTipHtml(zone, hostCount) {
-			var rows = [];
-			rows.push('<strong>' + esc(zone.name || zone.id) + '</strong>');
-			rows.push('<div class="muted">' + esc(zone.cidr || 'No segment') + (zone.trust ? ' · ' + esc(zone.trust) : '') + '</div>');
-			var allows = graph.zoneEdges.filter(function (edge) { return edge.action === 'allow' && (edge.from === 'zone:' + zone.id || edge.to === 'zone:' + zone.id); });
-			var denies = graph.zoneEdges.filter(function (edge) { return edge.action === 'deny' && (edge.from === 'zone:' + zone.id || edge.to === 'zone:' + zone.id); });
-			if (allows.length || denies.length) {
+
+		function zoneTipHtml(z, hostCount) {
+			var zid = 'zone:' + z.id;
+			var rows = [
+				'<strong>' + esc(z.name || z.id) + '</strong>',
+				'<div class="muted">' + esc(z.cidr || 'No subnet') + (z.trust ? ' · ' + esc(z.trust) : '') + '</div>'
+			];
+			var segRules = graph.zoneEdges.filter(function (e) { return e.from === zid || e.to === zid; });
+			var intra = graph.intraPolicies[zid] || [];
+			if (segRules.length || intra.length) {
 				rows.push('<ul>');
-				allows.concat(denies).forEach(function (edge) {
-					var outgoing = edge.from === 'zone:' + zone.id;
-					var other = outgoing ? endpointName(edge.to) : endpointName(edge.from);
-					rows.push('<li>' + (outgoing ? '→' : '←') + ' ' + esc(other) + ' <span class="tag ' + edge.action + '">' + (edge.action === 'allow' ? 'allowed' : 'denied') + '</span></li>');
+				segRules.forEach(function (e) {
+					var out = e.from === zid;
+					rows.push('<li>' + (out ? '→ ' : '← ') + esc(endpointName(out ? e.to : e.from)) + ' <span class="tag ' + e.action + '">' + (e.action === 'allow' ? 'allowed' : 'denied') + '</span></li>');
+				});
+				intra.forEach(function (ir) {
+					rows.push('<li>↻ ' + esc(ir.name) + ' <span class="tag ' + ir.action + '">' + (ir.action === 'allow' ? 'intra allow' : 'isolated') + '</span></li>');
 				});
 				rows.push('</ul>');
 			} else {
-				rows.push('<div class="muted">No segment-level policy rules reported.</div>');
+				rows.push('<div class="muted" style="margin-top:5px">No explicit inter-zone rules.</div>');
 			}
-			var exceptions = graph.edges.filter(function (edge) { return (edge.from === 'zone:' + zone.id || edge.to === 'zone:' + zone.id); });
-			var hostCountText = String(hostCount || 0) + (hostCount === 1 ? ' device attached' : ' devices attached');
-			rows.push('<div class="tip-row"><span>' + hostCountText + '</span><span>' + exceptions.length + ' device exceptions</span></div>');
+			var exc = graph.edges.filter(function (e) { return e.from === zid || e.to === zid; }).length;
+			rows.push('<div class="tip-row"><span>' + hostCount + (hostCount === 1 ? ' client' : ' clients') + '</span><span>' + exc + ' exceptions</span></div>');
 			return rows.join('');
-		}
-		if (!graph.stress) container.style.position = 'relative';
-		if (!graph.stress) {
-			tooltip = document.createElement('div');
-			tooltip.className = 'map-graph-tip';
 		}
 
 		graph.nodes.forEach(function (item) {
-			var group = svg('g', { 'class': 'map-graph-node map-graph-node-' + item.kind + (item.kind === 'zone' && item.zone && item.zone.isolation ? ' isolated' : '') + (item.device && item.device.stress ? ' stress' : ''), 'data-node-id': item.id });
-			if (options.selectedId && options.selectedId === item.id) group.setAttribute('class', group.getAttribute('class') + ' selected');
-			var circle = svg('circle', { cx: item.x, cy: item.y, r: item.r || 6, 'class': 'map-graph-circle' });
-			group.appendChild(circle);
+			var isIso = item.kind === 'zone' && item.zone && item.zone.isolation;
+			var isTrusted = item.kind === 'zone' && item.zone && !item.zone.isolation && String(item.zone.trust || '').toLowerCase() === 'trusted';
+			var isBlockedHost = item.kind === 'host' && !!graph.blockedHosts[item.id];
+			var cls = 'map-graph-node map-graph-node-' + item.kind +
+				(isIso ? ' isolated' : (isTrusted ? ' trusted' : '')) +
+				(isBlockedHost ? ' blocked' : '') +
+				(item.device && item.device.stress ? ' stress' : '') +
+				(options.selectedId && options.selectedId === item.id ? ' selected' : '');
+			var g = svg('g', { 'class': cls, 'data-node-id': item.id });
+
 			if (item.kind === 'zone') {
-				/* Name above the circle, CIDR + device count below — both outside
-				   the rim so phyllotaxis host dots never cover them. */
-				addText(group, item.x, item.y - item.r - 10, item.zone.name || item.zone.id, 'map-graph-zone-label', { 'text-anchor': 'middle' });
-				addText(group, item.x, item.y + item.r + 14, item.zone.cidr || 'Segment', 'map-graph-zone-meta', { 'text-anchor': 'middle' });
-				var hostCount = item.hostCount || 0;
-				addText(group, item.x, item.y + item.r + 27, hostCount + (hostCount === 1 ? ' device' : ' devices'), 'map-graph-zone-meta', { 'text-anchor': 'middle' });
-				if (!graph.stress) bindTip(group, zoneTipHtml(item.zone, hostCount));
+				if (isIso) g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r + 5, 'class': 'map-graph-zone-ring' }));
+				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r, 'class': 'map-graph-circle' }));
+				addText(g, item.x, item.y - item.r - (isIso ? 14 : 10), item.zone.name || item.zone.id, 'map-graph-zone-label', { 'text-anchor': 'middle' });
+				var hc = item.hostCount || 0;
+				var meta = (item.zone.cidr ? item.zone.cidr + ' · ' : '') + hc + (hc === 1 ? ' client' : ' clients');
+				addText(g, item.x, item.y + item.r + (isIso ? 19 : 16), meta, 'map-graph-zone-meta', { 'text-anchor': 'middle' });
+				bindInteractive(g, function () { return zoneTipHtml(item.zone, hc); }, item.id, null);
 			} else if (item.kind === 'special') {
-				addText(group, item.x, item.y + 42, labels[item.special] || item.label, 'map-graph-special-label', { 'text-anchor': 'middle' });
-			} else if (!graph.stress) {
-				group.setAttribute('tabindex', '0');
-				group.setAttribute('role', 'button');
-				group.setAttribute('aria-label', item.device.name || item.device.mac || item.device.id);
-				if (typeof options.onHostClick === 'function') {
-					group.addEventListener('click', function () { options.onHostClick(item.device); });
-					group.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); options.onHostClick(item.device); } });
+				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r + 5, 'class': 'map-graph-halo' }));
+				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r, 'class': 'map-graph-circle' }));
+				drawHubGlyph(g, item.special, item.x, item.y);
+				var lbl = labels[item.special] || item.label;
+				addText(g, item.x, item.y + item.r + 19, lbl, 'map-graph-special-label', { 'text-anchor': 'middle' });
+				bindInteractive(g, function () {
+					var cnt = graph.zoneEdges.concat(graph.edges).filter(function (e) { return e.from === item.id || e.to === item.id; }).length;
+					return '<strong>' + esc(lbl) + '</strong><div class="muted">' + cnt + ' policy path' + (cnt === 1 ? '' : 's') + '</div>';
+				}, item.id, null);
+			} else {
+				if (!graph.stress) {
+					g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: 11, 'class': 'map-graph-hit' }));
+					g.setAttribute('tabindex', '0');
+					g.setAttribute('role', 'button');
+					g.setAttribute('aria-label', item.device.name || item.device.mac || item.device.id);
+					if (typeof options.onHostClick === 'function') {
+						g.addEventListener('click', function () { options.onHostClick(item.device); });
+						g.addEventListener('keydown', function (ev) {
+							if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); options.onHostClick(item.device); }
+						});
+					}
+					bindInteractive(g, function () { return deviceTipHtml(item.device); }, item.id, null);
 				}
-				bindTip(group, deviceTipHtml(item.device));
+				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r || 5, 'class': 'map-graph-circle' }));
 			}
-			nodeLayer.appendChild(group);
+			nodeLayer.appendChild(g);
 		});
-		if (!graph.nodes.length) addText(root, 500, 330, labels.empty || 'No verified topology data is available.', 'map-graph-empty', { 'text-anchor': 'middle' });
+
+		if (!graph.nodes.length) {
+			addText(root, 500, 310, labels.empty || 'No verified topology data is available.', 'map-graph-empty', { 'text-anchor': 'middle' });
+		}
+
+		var hud = document.createElement('div');
+		hud.className = 'map-graph-hud';
+		[
+			['+', 'Zoom in', function () { zoomAt(1.35, graph.width / 2, graph.height / 2); }],
+			['−', 'Zoom out', function () { zoomAt(1 / 1.35, graph.width / 2, graph.height / 2); }],
+			['1:1', 'Reset view', function () { view.x = 0; view.y = 0; view.k = 1; applyView(); }]
+		].forEach(function (spec) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			b.textContent = spec[0];
+			b.title = spec[1];
+			b.setAttribute('aria-label', spec[1]);
+			b.addEventListener('click', spec[2]);
+			hud.appendChild(b);
+		});
+		if (container.style) container.style.position = 'relative';
+
 		clear(container);
 		container.appendChild(root);
+		container.appendChild(hud);
 		if (tooltip) container.appendChild(tooltip);
-		var zoneAllowCount = graph.zoneEdges.filter(function (edge) { return edge.action === 'allow'; }).length;
-		var exceptionCount = graph.edges.filter(function (edge) { return edge.action === 'allow'; }).length;
+
+		var zoneAllowCount = graph.zoneEdges.filter(function (e) { return e.action === 'allow'; }).length;
+		var exceptionCount = graph.edges.filter(function (e) { return e.action === 'allow'; }).length;
 		return {
 			nodeCount: graph.nodes.length,
 			clientCount: graph.clientCount,
 			zoneAllowCount: zoneAllowCount,
 			exceptionCount: exceptionCount,
 			allowedCount: zoneAllowCount + exceptionCount,
-			deniedCount: graph.zoneEdges.filter(function (edge) { return edge.action === 'deny'; }).length + graph.edges.filter(function (edge) { return edge.action === 'deny'; }).length,
-			observedAllowedCount: graph.observedEdges.filter(function (edge) { return edge.action === 'allow'; }).length,
-			observedDeniedCount: graph.observedEdges.filter(function (edge) { return edge.action === 'deny'; }).length,
+			deniedCount: graph.zoneEdges.filter(function (e) { return e.action === 'deny'; }).length + graph.edges.filter(function (e) { return e.action === 'deny'; }).length,
+			observedAllowedCount: graph.observedEdges.filter(function (e) { return e.action === 'allow'; }).length,
+			observedDeniedCount: graph.observedEdges.filter(function (e) { return e.action === 'deny'; }).length,
 			visibleEdgeCount: visibleZoneEdges.length + visibleEdges.length + visibleObservedEdges.length,
 			renderMs: Math.max(0, clock() - started),
 			stress: graph.stress
 		};
 	}
 
-	window.WBMapGraph = { build: build, render: render };
-})(window, document);
+	var api = { build: build, render: render };
+	if (typeof window !== 'undefined') window.WBMapGraph = api;
+	if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : {}, typeof document !== 'undefined' ? document : {});

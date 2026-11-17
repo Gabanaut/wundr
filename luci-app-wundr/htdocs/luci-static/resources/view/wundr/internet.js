@@ -98,11 +98,49 @@ return view.extend({
 		o.datatype = 'hostname';
 
 		o = s.option(form.Value, 'ipaddr', _('IPv4 address'));
-		o.depends('proto', 'static'); o.datatype = 'ip4addr'; o.rmempty = false;
+		o.depends('proto', 'static'); o.datatype = 'ip4addr("nomask")'; o.rmempty = false;
+		o.cfgvalue = function(sid) {
+			var first = L.toArray(uci.get('network', sid, 'ipaddr'))[0] || '';
+			return String(first).split('/')[0];
+		};
+		o.write = function(sid, value) {
+			var raw = uci.get('network', sid, 'ipaddr');
+			var mask = this.section.formvalue(sid, 'netmask') || '255.255.255.0';
+			if (Array.isArray(raw) || (raw && String(raw).indexOf('/') > 0)) {
+				var pfx = network.maskToPrefix(mask);
+				var rest = L.toArray(raw).slice(1);
+				uci.set('network', sid, 'ipaddr', [ value + '/' + (pfx != null ? pfx : 24) ].concat(rest));
+				uci.unset('network', sid, 'netmask');
+			} else {
+				uci.set('network', sid, 'ipaddr', value);
+				uci.set('network', sid, 'netmask', mask);
+			}
+		};
 		o = s.option(form.Value, 'netmask', _('Subnet mask'));
-		o.depends('proto', 'static'); o.datatype = 'netmask4'; o.default = '255.255.255.0';
+		o.depends('proto', 'static'); o.datatype = 'ip4addr("nomask")'; o.default = '255.255.255.0';
+		o.cfgvalue = function(sid) {
+			var m = uci.get('network', sid, 'netmask');
+			if (m) return m;
+			var first = L.toArray(uci.get('network', sid, 'ipaddr'))[0] || '';
+			var pfx = String(first).split('/')[1];
+			return (pfx != null && pfx !== '') ? (network.prefixToMask(+pfx) || '255.255.255.0') : '255.255.255.0';
+		};
+		o.write = function(sid, value) {
+			var raw = uci.get('network', sid, 'ipaddr');
+			var ip = this.section.formvalue(sid, 'ipaddr') || String(L.toArray(raw)[0] || '').split('/')[0];
+			if (Array.isArray(raw) || (raw && String(raw).indexOf('/') > 0)) {
+				if (ip) {
+					var pfx = network.maskToPrefix(value);
+					var rest = L.toArray(raw).slice(1);
+					uci.set('network', sid, 'ipaddr', [ ip + '/' + (pfx != null ? pfx : 24) ].concat(rest));
+				}
+				uci.unset('network', sid, 'netmask');
+			} else {
+				uci.set('network', sid, 'netmask', value);
+			}
+		};
 		o = s.option(form.Value, 'gateway', _('Gateway'));
-		o.depends('proto', 'static'); o.datatype = 'ip4addr'; o.rmempty = false;
+		o.depends('proto', 'static'); o.datatype = 'ip4addr("nomask")'; o.rmempty = false;
 
 		o = s.option(form.Value, 'username', _('PPPoE username'));
 		o.depends('proto', 'pppoe'); o.rmempty = false;

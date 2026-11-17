@@ -65,7 +65,7 @@ return view.extend({
 		var loadLbl = E('b', {}, [ load1 != null ? load1.toFixed(2) : '—' ]);
 		var memLbl = E('b', {}, [ u ? u.pct + '% · ' + fmt(u.used) + ' / ' + fmt(u.total) : '—' ]);
 		var upEl = E('b', {}, [ wb.fmtUptime(info.uptime) ]);
-		var tzLabel = E('b', {}, [ (info.localtime && board?.zones) ? new Date(info.localtime * 1000).toLocaleString() : '—' ]);
+		var tzLabel = E('b', {}, [ info.localtime ? new Date(info.localtime * 1000).toLocaleString() : '—' ]);
 
 		function refreshCounters() {
 			return L.resolveDefault(callInfo(), {}).then(function(i) {
@@ -80,7 +80,7 @@ return view.extend({
 				if (x) {
 					memLbl.textContent = x.pct + '% · ' + fmt(x.used) + ' / ' + fmt(x.total);
 					memBar.style.width = x.pct + '%';
-					memBar.parentNode.className = 'wb-bar' + (x.pct > 90 ? ' bad' : (x.pct > 80 ? 'warn' : ''));
+					memBar.parentNode.className = 'wb-bar' + (x.pct > 90 ? ' bad' : (x.pct > 80 ? ' warn' : ''));
 				}
 				upEl.textContent = wb.fmtUptime(i.uptime);
 				if (i.localtime) tzLabel.textContent = new Date(i.localtime * 1000).toLocaleString();
@@ -90,8 +90,9 @@ return view.extend({
 		/* ---- form ---- */
 		var m = new form.Map('system', null,
 			_('Identity and time. Every change is saved via the validated LuCI apply, with a 90-second rollback for safety.'));
-		m.chainload = function() { return m.children; };
-		var s = m.section(form.NamedSection, 'system', 'system', _('Basic settings'));
+		var s = m.section(form.TypedSection, 'system', _('Basic settings'));
+		s.anonymous = true;
+		s.addremove = false;
 		var o;
 		o = s.option(form.Value, 'hostname', _('Hostname'), _('How this router names itself on the local network.'));
 		o.datatype = 'hostname'; o.rmempty = false;
@@ -102,29 +103,57 @@ return view.extend({
 		tzo.rmempty = false;
 		tzo.write = function(section_id, value) {
 			uci.set('system', section_id, 'zonename', value);
-			var tz = tzMap[value] ? tzMap[value].tzstring : null;
+			var tz = tzMap[value] ? tzMap[value].tzstring : 'GMT0';
 			if (tz) uci.set('system', section_id, 'timezone', tz);
 		};
 
-		var ntp = s.option(form.Flag, 'ntp', _('Internet time synchronisation'), _('Uses NTP to keep the clock aligned — schedules and logs will be accurate.'));
+		var ntp = s.option(form.Flag, 'enabled', _('Internet time synchronisation'), _('Uses NTP to keep the clock aligned — schedules and logs will be accurate.'));
+		ntp.ucisection = 'ntp';
 		ntp.rmempty = false;
 		ntp.default = ntp.enabled;
+		ntp.cfgvalue = function() {
+			var v = uci.get('system', 'ntp', 'enabled');
+			return v === '0' ? '0' : '1';
+		};
+		ntp.write = function(section_id, value) {
+			if (!uci.get('system', 'ntp')) {
+				uci.add('system', 'timeserver', 'ntp');
+				uci.set('system', 'ntp', 'server', [
+					'0.openwrt.pool.ntp.org', '1.openwrt.pool.ntp.org',
+					'2.openwrt.pool.ntp.org', '3.openwrt.pool.ntp.org'
+				]);
+			}
+			uci.set('system', 'ntp', 'enabled', value === '0' ? '0' : '1');
+		};
 
 		/* ---- maintenance block ---- */
 		var mtItems = [
-			[ _('Configuration backup'), _('Download a restorable archive of just your settings.'), 'admin/system/flash#backup', 'download' ],
+			[ _('Configuration backup'), _('Download a restorable archive of just your settings.'), 'admin/system/flash', 'download' ],
 			[ _('Firmware upgrade'), _('Flash a new image — keep or replace configuration.'), 'admin/system/flash', 'refresh' ],
-			[ _('Software packages'), _('Install or remove services (AdGuard Home, SQM, VPN servers…).'), 'admin/system/packages', 'apps' ],
-			[ _('Startup & shutdown'), _('Toggle which services start at boot.'), 'admin/system/startup', 'sliders' ],
-			[ _('Administrator access'), _('Change the LuCI / SSH password.'), 'admin/system/admin', 'shield' ],
-			[ _('Reboot'), _('Restart the router now.'), 'admin/system/reboot', 'power' ]
+			[ _('Software packages'), _('Install or remove services (AdGuard Home, SQM, VPNs…).'), '@pkg', 'apps' ],
+			[ _('Administrator & SSH'), _('Change the root password, SSH keys and web access.'), 'admin/system/admin', 'shield' ],
+			[ _('Mount points & USB'), _('Manage external drives, partitions and filesystems.'), 'admin/system/mounts', 'port' ],
+			[ _('Startup & cron tasks'), _('Toggle boot scripts or edit scheduled tasks.'), 'admin/system/startup', 'sliders' ],
+			[ _('Scheduled tasks (cron)'), _('Run periodic maintenance or DDNS/wireguard scripts.'), 'admin/system/crontab', 'clock' ],
+			[ _('Reboot'), _('Restart the router safely now.'), 'admin/system/reboot', 'power' ]
 		];
 		var mt = E('div', { 'style': 'display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))' });
 		mtItems.forEach(function(row) {
-			mt.appendChild(E('div', { 'class': 'wb-setting' }, [
+			var linkEl = row[2] === '@pkg'
+				? wb.pkgLink({ 'class': 'wb-btn sm ghost' }, [ wb.iconLabel(row[3], _('Open')) ])
+				: E('a', { 'class': 'wb-btn sm ghost', 'href': L.url(row[2]) }, [ wb.iconLabel(row[3], _('Open')) ]);
+			var wrap = E('div', { 'class': 'wb-setting' }, [
 				E('div', { 'class': 'grow' }, [ E('div', { 'class': 'name' }, [ row[0] ]), E('div', { 'class': 'meta' }, [ row[1] ]) ]),
-				E('a', { 'class': 'wb-btn sm ghost', 'href': L.url(row[2]) }, [ wb.iconLabel(row[3], _('Open')) ])
-			]));
+				linkEl
+			]);
+			if (row[2] === 'admin/system/mounts' || row[2] === 'admin/system/crontab') {
+				if (ui.menu && typeof ui.menu.load === 'function') {
+					ui.menu.load().then(function(tree) {
+						if (tree && !wb.menuHas(tree, row[2])) wrap.style.display = 'none';
+					}).catch(function() {});
+				}
+			}
+			mt.appendChild(wrap);
 		});
 
 		return m.render().then(function(formNode) {
@@ -172,7 +201,5 @@ return view.extend({
 				wb.card(_('Live system log'), [ E('div', { 'class': 'wb-sub', 'style': 'margin-bottom:8px' }, [ _('Recent kernel and daemon messages — new lines auto-refresh.') ]), logBox ])
 			]);
 		});
-	},
-
-	handleSave: null, handleSaveApply: null, handleReset: null
+	}
 });

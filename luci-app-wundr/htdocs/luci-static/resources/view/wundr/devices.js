@@ -100,8 +100,10 @@ return view.extend({
 
 		function row(dev) {
 			var blocked = !!findBlock(dev.mac);
+			var lsid = leaseName(dev.mac);
 			var conn = dev.wifi ? ('Wi-Fi' + (dev.ssid ? ' · ' + dev.ssid : '')) : (dev.wired ? _('Wired') : '—');
-			var displayName = hintName(dev.mac) || (leaseName(dev.mac) && uci.get('dhcp', leaseName(dev.mac), 'name')) || dev.name || _('Unknown device');
+			var displayName = (lsid && uci.get('dhcp', lsid, 'name')) || hintName(dev.mac) || dev.name || _('Unknown device');
+			var pinnedIp = lsid ? uci.get('dhcp', lsid, 'ip') : null;
 			return E('tr', { 'data-hay': (String(displayName) + ' ' + (dev.ip || '') + ' ' + dev.mac).toLowerCase() }, [
 				E('td', { 'class': 'name' }, [
 					E('div', { 'class': 'wb-device-name' }, [
@@ -109,31 +111,54 @@ return view.extend({
 						E('div', {}, [ E('b', {}, [ displayName ]), E('small', {}, [ dev.mac ]) ])
 					])
 				]),
-				E('td', { 'class': 'mono' }, [ dev.ip || (dev.online ? '—' : _('offline')) ]),
+				E('td', { 'class': 'mono' }, [ dev.ip || pinnedIp || (dev.online ? '—' : _('offline')) ]),
 				E('td', {}, [ conn, ' ', dev.wifi ? wb.sigBars(dev.signal) : '' ]),
 				E('td', { 'class': 'mono' }, [ dev.online ? wb.pill(_('Online'), 'good') : wb.pill(_('Offline'), 'mut') ]),
 				E('td', { 'class': 'actions' }, [
-					E('button', { 'class': 'wb-btn sm', 'title': _('Set up a static lease'), 'click': function() { addLease(dev, displayName); } }, [ _('Lease') ]),
+					E('button', { 'class': 'wb-btn sm' + (lsid ? ' active' : ''), 'title': lsid ? _('Edit or remove static lease') : _('Set up a static lease'), 'click': function() { addLease(dev, displayName); } }, [ lsid ? _('Static IP') : _('Lease') ]),
 					wb.toggle(!blocked, function(allow) { return setBlock(dev, allow); }, { 'aria-label': _('Allow internet'), 'title': allow_(blocked) })
 				])
 			]);
 		}
 		function allow_(blocked) { return blocked ? _('Currently paused — click to allow') : _('Click to pause internet'); }
 
+		function validIpv4(v) {
+			var p = String(v || '').trim().split('.');
+			return p.length === 4 && p.every(function(o) { return /^\d{1,3}$/.test(o) && Number(o) <= 255; });
+		}
+
 		function addLease(dev, suggestName) {
-			var name = wb.input({ 'value': suggestName && suggestName !== _('Unknown device') ? suggestName : '', 'placeholder': _('e.g. Living-room TV') });
-			var ip = wb.input({ 'value': dev.ip || '', 'placeholder': '192.168.1.50', 'id': 'wb-lease-ip' });
-			wb.formModal(_('Static lease'), [
+			var existing = leaseName(dev.mac);
+			var curName = existing ? (uci.get('dhcp', existing, 'name') || '') : (suggestName && suggestName !== _('Unknown device') ? suggestName : '');
+			var curIp = (existing && uci.get('dhcp', existing, 'ip')) || dev.ip || '';
+			var name = wb.input({ 'value': curName, 'placeholder': _('e.g. Living-room TV') });
+			var ip = wb.input({ 'value': curIp, 'placeholder': '192.168.1.50', 'id': 'wb-lease-ip' });
+			var rmBox = existing ? E('input', { 'type': 'checkbox' }) : null;
+			var fields = [
 				{ label: _('Name'), node: name },
 				{ label: _('IPv4 address'), node: ip, desc: _('Pins this address to %s. Reuse the current one to avoid surprises.').format(dev.mac) },
 				{ raw: E('div', { 'class': 'wb-form-desc' }, [ _('Device: ') + dev.mac ]) }
-			], function() {
-				var host = uci.add('dhcp', 'host');
+			];
+			if (rmBox) {
+				fields.push({ label: _('Remove'), node: E('label', { 'style': 'display:inline-flex;align-items:center;gap:6px' }, [ rmBox, _('Delete static lease reservation') ]) });
+			}
+			wb.formModal(existing ? _('Edit static lease') : _('Static lease'), fields, function() {
+				if (rmBox && rmBox.checked) {
+					uci.remove('dhcp', existing);
+					return wb.apply(false, _('Static lease removed'), dev.mac)
+						.then(function() { return uci.load('dhcp'); }).then(render);
+				}
+				var ipVal = ip.value.trim();
+				if (ipVal && !validIpv4(ipVal)) throw new Error(_('Enter a valid IPv4 address (e.g. 192.168.1.50).'));
+				var host = existing || uci.add('dhcp', 'host');
 				if (name.value.trim()) uci.set('dhcp', host, 'name', name.value.trim());
+				else uci.unset('dhcp', host, 'name');
 				uci.set('dhcp', host, 'mac', [ dev.mac.toUpperCase() ]);
-				if (ip.value.trim()) uci.set('dhcp', host, 'ip', ip.value.trim());
-				return wb.apply(false, _('Lease added'), name.value.trim() || dev.mac);
-			}, { ok: _('Add lease') });
+				if (ipVal) uci.set('dhcp', host, 'ip', ipVal);
+				else uci.unset('dhcp', host, 'ip');
+				return wb.apply(false, existing ? _('Static lease updated') : _('Lease added'), name.value.trim() || dev.mac)
+					.then(function() { return uci.load('dhcp'); }).then(render);
+			}, { ok: existing ? _('Save lease') : _('Add lease') });
 		}
 
 		function setBlock(dev, allow) {
@@ -160,7 +185,7 @@ return view.extend({
 		function render() {
 			var list = buildList(live);
 			var table = E('table', { 'class': 'wb-table' }, [
-				E('thead', {}, [ E('tr', {}, [ E('th', {}, _('Device')), E('th', {}, _('IPv4')), E('th', {}, _('Connection')), E('th', {}, _('Status')), E('th', {}, {style:'text-align:right'}, _('Actions')) ]) ]),
+				E('thead', {}, [ E('tr', {}, [ E('th', {}, _('Device')), E('th', {}, _('IPv4')), E('th', {}, _('Connection')), E('th', {}, _('Status')), E('th', { 'style': 'text-align:right' }, _('Actions')) ]) ]),
 				E('tbody', {}, list.length ? list.map(row) : [ E('tr', {}, [ E('td', { 'class': 'wb-empty', 'colspan': '5' }, _('No devices have been seen yet.')) ]) ])
 			]);
 			var online = list.filter(function(d) { return d.online; }).length;

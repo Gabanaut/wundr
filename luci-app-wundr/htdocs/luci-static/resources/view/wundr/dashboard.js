@@ -183,10 +183,11 @@ return view.extend({
 				(d.wifiNets || []).forEach(function(n, i) { if (n.getWifiDeviceName() === r.getName()) count += ((d.assocs || [])[i] || []).length; });
 				return E('span', { 'class': 'wb-radio' + (r.isUp() ? '' : ' off') }, [ E('span', { 'class': 'sig' }), wb.bandLabel(r.get('band')), ' · ', count + ' ' + _('clients') ]);
 			});
-			var ssids = (d.wifiNets || []).filter(function(n) { return n.getMode() === 'ap' || !n.getMode(); }).map(function(n, i) {
+			var ssids = (d.wifiNets || []).filter(function(n) { return n.getMode() === 'ap' || !n.getMode(); }).map(function(n) {
+				var idx = (d.wifiNets || []).indexOf(n);
 				return E('div', { 'class': 'wb-setting' }, [
 					E('div', { 'class': 'grow' }, [ E('div', { 'class': 'name' }, [ n.getActiveSSID() || n.getSSID() || _('Unnamed') ]), E('div', { 'class': 'meta' }, [ wb.bandLabel(n.getWifiDevice() ? n.getWifiDevice().get('band') : null, n.getChannel()) + ' · ' + wb.encryptionLabel(n.get('encryption')) ]) ]),
-					wb.pill(n.isUp() ? ((d.assocs[i] || []).length + ' ' + _('clients')) : (n.isDisabled() ? _('Off') : _('Down')), n.isUp() ? 'good' : 'mut')
+					wb.pill(n.isUp() ? (((d.assocs[idx]) || []).length + ' ' + _('clients')) : (n.isDisabled() ? _('Off') : _('Down')), n.isUp() ? 'good' : 'mut')
 				]);
 			});
 			dom.content(wifiBody, [

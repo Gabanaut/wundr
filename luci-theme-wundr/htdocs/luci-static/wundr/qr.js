@@ -1,9 +1,4 @@
 'use strict';
-/* Wundr qr.js — dependency-free QR Code encoder (ISO/IEC 18004, byte mode,
- * error-correction level L, versions 1–9, automatic mask selection).
- * Covers Wi-Fi join strings (WIFI:T:WPA;S:…;P:…;;) up to 230 bytes.
- * Exposes window.WBQR = { encode(text) -> {size, get(x,y)}, draw(canvas, text, opts) }. */
-
 (function (window) {
 	var TOTAL = [0, 26, 44, 70, 100, 134, 172, 196, 242, 292];
 	var ECC_PER_BLOCK = [0, 7, 10, 15, 20, 26, 18, 20, 24, 30];

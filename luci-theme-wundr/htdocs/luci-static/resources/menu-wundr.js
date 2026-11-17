@@ -13,11 +13,77 @@ return baseclass.extend({
 	},
 
 	render(tree) {
-		let node = tree;
-		let url = '';
-
+		this.renderStandaloneNav(tree);
 		this.renderTabMenu(tree);
 		this.renderDrawerMenu(tree);
+	},
+
+	/* When luci-theme-wundr is installed standalone without luci-app-wundr,
+	 * populate the left sidebar directly from LuCI's native `admin` menu tree
+	 * so every stock OpenWrt page is navigable out of the box. */
+	renderStandaloneNav(tree) {
+		const nav = document.querySelector('.wb-nav');
+		if (!nav || nav.children.length > 0) return;
+
+		const admin = tree && tree.children && tree.children.admin;
+		if (!admin) return;
+
+		const iconMap = {
+			status: 'dashboard',
+			system: 'system',
+			services: 'apps',
+			network: 'port',
+			vpn: 'shield',
+			nas: 'download',
+			docker: 'apps'
+		};
+		const req = (L.env.dispatchpath && L.env.dispatchpath.length ? L.env.dispatchpath : L.env.requestpath) || [];
+		const here = req.join('/');
+
+		ui.menu.getChildren(admin).forEach((section, idx) => {
+			if (section.name === 'logout' || section.name === 'uci' || section.name === 'ubus' || section.name === 'menu') return;
+			const baseUrl = 'admin/' + section.name;
+			const subs = ui.menu.getChildren(section);
+			const icoSpan = E('span', { 'class': 'wb-nav-ico' });
+			if (window.wbIcon) icoSpan.innerHTML = window.wbIcon(iconMap[section.name] || 'sliders', 18);
+
+			if (!subs.length) {
+				const a = E('a', { 'href': L.url(baseUrl) }, [ icoSpan, E('span', {}, [ _(section.title) ]) ]);
+				if (here === baseUrl || here.indexOf(baseUrl + '/') === 0) a.classList.add('active');
+				nav.appendChild(E('li', {}, [ a ]));
+				return;
+			}
+
+			let hasActive = false;
+			const subUl = E('ul', { 'class': 'wb-nav-sub' });
+			subs.forEach(sub => {
+				const subPath = baseUrl + '/' + sub.name;
+				const active = (here === subPath || here.indexOf(subPath + '/') === 0);
+				if (active) hasActive = true;
+				const a = E('a', { 'href': L.url(subPath), 'class': active ? 'active' : '' }, [ E('span', {}, [ _(sub.title) ]) ]);
+				subUl.appendChild(E('li', {}, [ a ]));
+			});
+
+			const open = hasActive || idx === 0;
+			const li = E('li', { 'class': 'wb-nav-group' + (open ? ' is-open' : '') });
+			const toggle = E('button', {
+				'class': 'wb-nav-group-toggle',
+				'type': 'button',
+				'aria-expanded': String(open),
+				'click': () => {
+					const next = !li.classList.contains('is-open');
+					li.classList.toggle('is-open', next);
+					toggle.setAttribute('aria-expanded', String(next));
+				}
+			}, [ icoSpan, E('span', {}, [ _(section.title) ]), E('span', { 'class': 'wb-nav-chevron', 'aria-hidden': 'true' }) ]);
+
+			li.appendChild(toggle);
+			li.appendChild(subUl);
+			nav.appendChild(li);
+		});
+
+		const proWrap = document.querySelector('.wb-pro');
+		if (proWrap && nav.children.length > 0) proWrap.style.display = 'none';
 	},
 
 	renderTabMenu(tree) {

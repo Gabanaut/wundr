@@ -186,13 +186,14 @@ function nextFreeVid(used) {
 
 function freeThirdOctet() {
 	/* Segments use 192.168.<third>.1/24; avoid the LAN third and collisions. */
-	var lanIp = uci.get('network', 'lan', 'ipaddr') || '';
-	var lanThird = String(lanIp).split('.')[2];
+	var lanIp = L.toArray(uci.get('network', 'lan', 'ipaddr'))[0] || '';
+	var lanThird = String(lanIp).split('/')[0].split('.')[2];
 	var used = {};
 	uci.sections('network', 'interface', function(s) {
-		var ip = s.ipaddr || '';
-		var t = String(ip).split('.')[2];
-		if (t != null && t !== '') used[t] = true;
+		L.toArray(s.ipaddr).forEach(function(ip) {
+			var t = String(ip).split('/')[0].split('.')[2];
+			if (t != null && t !== '') used[t] = true;
+		});
 	});
 	for (var t = 0; t <= 255; t++) {
 		var s = String(t);
@@ -623,7 +624,7 @@ return view.extend({
 				return _('Interface %s already exists.').format(segmentInterfaceName(+v));
 			if (!/^\d{1,3}$/.test(t) || +t > 255)
 				return _('Third octet must be 0–255.');
-			if (t === String(uci.get('network', 'lan', 'ipaddr') || '').split('.')[2])
+			if (t === String(L.toArray(uci.get('network', 'lan', 'ipaddr'))[0] || '').split('/')[0].split('.')[2])
 				return _('That octet is used by the main LAN subnet.');
 			return null;
 		}

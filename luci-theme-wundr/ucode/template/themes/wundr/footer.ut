@@ -20,7 +20,7 @@
   <footer class="wb-footer">
     <div class="wb-footer-brand">
       <span class="wb-footer-brand-name"><svg class="wb-logo wb-logo-small" viewBox="0 0 40 44" aria-hidden="true"><path class="wb-logo-wave" d="M6 12a19 19 0 0 1 28 0"/><path class="wb-logo-wave wb-logo-wave-2" d="M11 18a12 12 0 0 1 18 0"/><path class="wb-logo-frame" d="M16 24a5.5 5.5 0 0 1 8 0"/><path class="wb-logo-path" d="M9 26l4 11 7-14 7 14 4-11"/></svg>Wundr</span>
-      <span class="wb-footer-sub">{{ version.distname }} {{ version.distversion }} · LuCI {{ version.luciversion }} · <a class="wb-footer-credit" href="https://github.com/wundr-router/wundr" target="_blank" rel="noreferrer">Powered by Wundr</a></span>
+      <span class="wb-footer-sub">{{ version.distname }} {{ version.distversion }} · LuCI {{ version.luciversion }} · <a class="wb-footer-credit" href="https://github.com/Gabanaut/wundr" target="_blank" rel="noreferrer">Powered by Wundr</a></span>
     </div>
     <div class="wb-footer-right">
       <a href="{{ dispatcher.build_url('admin/system/reboot') }}">{{ _('Reboot') }}</a>
@@ -29,7 +29,7 @@
     </div>
   </footer>
 
-  <script src="{{ media }}/shell.js?v=0.2.0"></script>
+  <script src="{{ media }}/shell.js"></script>
   <script>L.require('menu-wundr')</script>
   {% endif %}
 </body>

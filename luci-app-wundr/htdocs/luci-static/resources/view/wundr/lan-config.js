@@ -2,26 +2,57 @@
 'require view';
 'require form';
 'require uci';
+'require network';
 'require dom';
 
 /* Wundr LAN/DHCP — native configuration editor over network + dhcp configs.
- * Includes the DHCP DNS servers handed to clients (dhcp option 6),
- * which the vendor panel exposes and our read-only view did not. */
+ * Handles both OpenWrt 24+/25+ CIDR `list ipaddr` ('192.168.1.1/24') and
+ * classic scalar `ipaddr` + `netmask`, plus DHCP DNS servers (option 6). */
+
+function parseDnsOpt6(section_id) {
+	var list = L.toArray(uci.get('dhcp', section_id, 'dhcp_option'));
+	for (var i = 0; i < list.length; i++) {
+		var s = String(list[i]);
+		if (/^6,/.test(s)) {
+			var parts = s.split(',');
+			return { primary: parts[1] || '', secondary: parts[2] || '' };
+		}
+	}
+	return { primary: '', secondary: '' };
+}
+
+function writeDnsOpt6(section, section_id) {
+	var primary = (section.formvalue(section_id, '_dns_primary') || '').trim();
+	var secondary = (section.formvalue(section_id, '_dns_secondary') || '').trim();
+	var others = L.toArray(uci.get('dhcp', section_id, 'dhcp_option')).filter(function(x) {
+		return !/^6,/.test(String(x));
+	});
+	var opt6 = (primary || secondary)
+		? '6,' + [ primary, secondary ].filter(Boolean).join(',')
+		: null;
+	var next = opt6 ? others.concat([ opt6 ]) : others;
+	if (next.length)
+		uci.set('dhcp', section_id, 'dhcp_option', next);
+	else
+		uci.unset('dhcp', section_id, 'dhcp_option');
+}
 
 return view.extend({
 	load: function() {
 		return Promise.all([
 			uci.load('network'),
-			uci.load('dhcp')
-		]).then(function() {
+			uci.load('dhcp'),
+			L.resolveDefault(network.getHostHints(), {})
+		]).then(function(res) {
 			/* Some minimal builds ship without a dhcp.lan section; create it
 			   so the NamedSection editors below have something to bind to. */
 			if (!uci.get('dhcp', 'lan'))
 				uci.add('dhcp', 'dhcp', 'lan');
+			return res[2] || {};
 		});
 	},
 
-	render: function() {
+	render: function(hints) {
 		var m, m2, s, o;
 
 		m = new form.Map('network', _('LAN & DHCP'),
@@ -31,15 +62,44 @@ return view.extend({
 		/* ---- LAN interface (network config) ---- */
 		s = m.section(form.NamedSection, 'lan', 'interface', _('LAN Interface'));
 
+		function writeLanSubnet(section, sid) {
+			var raw = uci.get('network', sid, 'ipaddr');
+			var ip = section.formvalue(sid, 'ipaddr') || String(L.toArray(raw)[0] || '').split('/')[0];
+			var mask = section.formvalue(sid, 'netmask') || '255.255.255.0';
+			if (!ip) return;
+			if (Array.isArray(raw) || (raw && String(raw).indexOf('/') > 0)) {
+				var pfx = network.maskToPrefix(mask);
+				var rest = L.toArray(raw).slice(1);
+				uci.set('network', sid, 'ipaddr', [ ip + '/' + (pfx != null ? pfx : 24) ].concat(rest));
+				uci.unset('network', sid, 'netmask');
+			} else {
+				uci.set('network', sid, 'ipaddr', ip);
+				uci.set('network', sid, 'netmask', mask);
+			}
+		}
+
 		o = s.option(form.Value, 'ipaddr', _('Router IPv4 address'),
 			_('The address used to reach this router and the default gateway for clients.'));
-		o.datatype = 'ip4addr';
+		o.datatype = 'ip4addr("nomask")';
 		o.rmempty = false;
+		o.cfgvalue = function(sid) {
+			var first = L.toArray(uci.get('network', sid, 'ipaddr'))[0] || '';
+			return String(first).split('/')[0];
+		};
+		o.write = function(sid) { writeLanSubnet(this.section, sid); };
 
 		o = s.option(form.Value, 'netmask', _('Subnet mask'));
-		o.datatype = 'netmask4';
+		o.datatype = 'ip4addr("nomask")';
 		o.default = '255.255.255.0';
 		o.rmempty = false;
+		o.cfgvalue = function(sid) {
+			var mask = uci.get('network', sid, 'netmask');
+			if (mask) return mask;
+			var first = L.toArray(uci.get('network', sid, 'ipaddr'))[0] || '';
+			var pfx = String(first).split('/')[1];
+			return (pfx != null && pfx !== '') ? (network.prefixToMask(+pfx) || '255.255.255.0') : '255.255.255.0';
+		};
+		o.write = function(sid) { writeLanSubnet(this.section, sid); };
 
 		/* ---- DHCP server (dhcp config, lan section) ---- */
 		m2 = new form.Map('dhcp', _('DHCP Server'));
@@ -74,35 +134,71 @@ return view.extend({
 		   map onto it via cfgvalue/write so users never see the wire format. */
 		o = s.option(form.Value, '_dns_primary', _('Primary DNS'),
 			_('Leave empty to hand out the router itself (recommended unless running an external resolver like AdGuard Home).'));
-		o.datatype = 'ip4addr';
+		o.datatype = 'ip4addr("nomask")';
+		o.optional = true;
 		o.rmempty = true;
-		o.cfgvalue = function(section_id) {
-			var opt = uci.get('dhcp', section_id, 'dhcp_option') || '';
-			var parts = String(opt).split(',');
-			return parts[1] || '';
-		};
-		o.write = function(section_id, value) {
-			var secondary = this.map.formvalue('_dns_secondary', section_id) || '';
-			if (value || secondary)
-				uci.set('dhcp', section_id, 'dhcp_option', '6,' + (value || '') + (secondary ? ',' + secondary : ''));
-			else
-				uci.unset('dhcp', section_id, 'dhcp_option');
-		};
-		o.remove = function(section_id) { uci.unset('dhcp', section_id, 'dhcp_option'); };
+		o.cfgvalue = function(section_id) { return parseDnsOpt6(section_id).primary; };
+		o.write = function(section_id) { writeDnsOpt6(this.section, section_id); };
+		o.remove = function(section_id) { writeDnsOpt6(this.section, section_id); };
 
 		o = s.option(form.Value, '_dns_secondary', _('Secondary DNS'),
 			_('Optional fallback for clients.'));
-		o.datatype = 'ip4addr';
+		o.datatype = 'ip4addr("nomask")';
+		o.optional = true;
 		o.rmempty = true;
-		o.cfgvalue = function(section_id) {
-			var opt = uci.get('dhcp', section_id, 'dhcp_option') || '';
-			return String(opt).split(',')[2] || '';
-		};
-		o.write = function(section_id, value) {
-			/* primary's write handles the combined option; nothing to do here */
-		};
-		o.remove = function(section_id) { /* handled by primary */ };
+		o.cfgvalue = function(section_id) { return parseDnsOpt6(section_id).secondary; };
+		o.write = function(section_id) { writeDnsOpt6(this.section, section_id); };
+		o.remove = function(section_id) { writeDnsOpt6(this.section, section_id); };
 
+		/* ---- IPv6 LAN Services (RA & DHCPv6) ---- */
+		s = m2.section(form.NamedSection, 'lan', 'dhcp', _('IPv6 LAN Announcements'));
+
+		o = s.option(form.ListValue, 'ra', _('Router Advertisements (SLAAC)'),
+			_('Server mode advertises IPv6 prefixes to LAN clients automatically.'));
+		o.value('server', _('Server mode (default)'));
+		o.value('hybrid', _('Hybrid mode'));
+		o.value('relay', _('Relay mode'));
+		o.value('disabled', _('Disabled'));
+		o.default = 'server';
+		o.rmempty = true;
+
+		o = s.option(form.ListValue, 'dhcpv6', _('DHCPv6 Service'));
+		o.value('server', _('Server mode (stateful + stateless)'));
+		o.value('hybrid', _('Hybrid mode'));
+		o.value('relay', _('Relay mode'));
+		o.value('disabled', _('Disabled'));
+		o.default = 'server';
+		o.rmempty = true;
+
+		/* ---- Static DHCP Leases ---- */
+		s = m2.section(form.GridSection, 'host', _('Static DHCP Leases'),
+			_('Pin fixed IPv4 addresses and hostnames to devices by MAC address.'));
+		s.addremove = true;
+		s.anonymous = true;
+		s.nodescriptions = true;
+
+		o = s.option(form.Value, 'name', _('Hostname'));
+		o.datatype = 'hostname';
+		o.rmempty = true;
+
+		o = s.option(form.DynamicList, 'mac', _('MAC address'));
+		o.datatype = 'macaddr';
+		o.rmempty = false;
+		Object.keys(hints || {}).sort().forEach(function(mac) {
+			var h = hints[mac] || {};
+			var ipHint = (Array.isArray(h.ipaddrs) && h.ipaddrs[0]) || h.ip || '';
+			var lbl = [ mac, h.name, ipHint ].filter(Boolean).join(' · ');
+			o.value(mac, lbl);
+		});
+
+		o = s.option(form.Value, 'ip', _('IPv4 address'));
+		o.datatype = 'or(ip4addr("nomask"), "ignore")';
+		o.placeholder = '192.168.1.50';
+		o.rmempty = true;
+
+		o = s.option(form.Value, 'leasetime', _('Lease time'));
+		o.placeholder = '12h';
+		o.rmempty = true;
 
 		return Promise.all([ m.render(), m2.render() ]).then(function(nodes) {
 			return E('div', {}, nodes);

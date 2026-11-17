@@ -28,7 +28,7 @@ return view.extend({
 		if (!state.haveSqm) {
 			return E('div', {}, [
 				wb.hero(_('Quality of service'), _('Stop one heavy download from ruining video calls for everyone else.'), [], [
-					E('a', { 'class': 'wb-btn primary', 'href': L.url('admin/system/packages') }, [ wb.iconLabel('download', _('Install SQM')) ])
+					wb.pkgLink({ 'class': 'wb-btn primary' }, [ wb.iconLabel('download', _('Install SQM')) ])
 				]),
 				E('div', { 'class': 'wb-setting-note warn' }, [ _('SQM is not installed on this router.') ]),
 				wb.card(_('What it does'), [ E('p', { 'class': 'wb-sub' }, [

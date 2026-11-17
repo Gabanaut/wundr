@@ -69,7 +69,7 @@ return view.extend({
 			_('Auto (or auto with a list like "auto") lets the router pick. ' +
 			  'Fixed channels bypass ACS/DFS. Values depend on band and country.'));
 		o.default = 'auto';
-		o.datatype = 'or("auto", auto, uinteger)';
+		o.datatype = 'or("auto", uinteger)';
 		o.rmempty = true;
 
 		o = s.option(form.ListValue, 'txpower', _('Transmit power (dBm)'),

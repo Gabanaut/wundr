@@ -25,13 +25,13 @@ on:
       - 'luci-theme-wundr/**'
       - 'luci-app-wundr/**'
       - '.github/workflows/build.yml'
-      - 'smoke/qa-static.sh'
+      - 'smoke/**'
   pull_request:
     paths:
       - 'luci-theme-wundr/**'
       - 'luci-app-wundr/**'
       - '.github/workflows/build.yml'
-      - 'smoke/qa-static.sh'
+      - 'smoke/**'
   workflow_dispatch:
 
 concurrency:

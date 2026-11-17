@@ -50,8 +50,10 @@ return view.extend({
 		var portScroll = E('div');
 
 		function facts() {
-			var ip = uci.get('network', 'lan', 'ipaddr') || '—';
-			var mask = uci.get('network', 'lan', 'netmask') || '255.255.255.0';
+			var rawIp = L.toArray(uci.get('network', 'lan', 'ipaddr'))[0] || '';
+			var ip = rawIp ? String(rawIp).split('/')[0] : '—';
+			var pfx = rawIp ? String(rawIp).split('/')[1] : null;
+			var mask = uci.get('network', 'lan', 'netmask') || ((pfx != null && pfx !== '') ? (network.prefixToMask(+pfx) || '255.255.255.0') : '255.255.255.0');
 			var start = uci.get('dhcp', 'lan', 'start'), limit = uci.get('dhcp', 'lan', 'limit');
 			var ignore = uci.get('dhcp', 'lan', 'ignore') === '1';
 			return [
@@ -77,7 +79,7 @@ return view.extend({
 						name = i['.name']; seen[vid] = true;
 					}
 				});
-				rows.push({ vid: vid, name: name, ports: (s.ports || []).join(' · ') || '—' });
+				rows.push({ vid: vid, name: name, ports: L.toArray(s.ports).join(' · ') || '—' });
 			});
 			return { mode: _('Segmented (VLANs)'), rows: rows };
 		}
@@ -91,7 +93,7 @@ return view.extend({
 					var nets = Array.isArray(z.network) ? z.network : String(z.network || '').split(/\s+/);
 					if (nets.indexOf(i['.name']) >= 0) zone = z.name || z['.name'];
 				});
-				rows.push({ id: i['.name'], proto: i.proto || '—', device: i.device || i.ifname || '—', ip: i.ipaddr || '', zone: zone || '—' });
+				rows.push({ id: i['.name'], proto: i.proto || '—', device: i.device || i.ifname || '—', ip: L.toArray(i.ipaddr).join(', '), zone: zone || '—' });
 			});
 			return rows;
 		}

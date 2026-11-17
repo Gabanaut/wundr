@@ -123,7 +123,7 @@ for f in os.listdir(acl):
 
 # Native ubus objects provided by the system/LuCI itself — not ours to ship.
 NATIVE = {'system', 'iwinfo', 'luci-rpc', 'network.device', 'network.interface',
-          'network', 'file', 'rc', 'session', 'uci', 'service', 'luci', 'log'}
+          'network.wireless', 'network', 'file', 'rc', 'session', 'uci', 'service', 'luci', 'log'}
 used -= NATIVE
 missing = sorted(used - plugins)
 if missing:
@@ -142,12 +142,21 @@ else
 	say "  ok  backend has no passive HTTP/DHCP side effect"
 fi
 
-# 4. Size budget: shell payload (cascade+app+transparency+shell+icons, gz estimate)
+# 4. Size budget: shell payload (cascade+app+shell+icons+charts+qr+map-graph + Studio Triad, gz estimate)
 if command -v gzip >/dev/null; then
 	BYTES=$(cat "$ROOT"/luci-theme-wundr/htdocs/luci-static/wundr/*.css \
 	             "$ROOT"/luci-theme-wundr/htdocs/luci-static/wundr/*.js 2>/dev/null | gzip -c | wc -c)
-	say "  shell gzip ≈ ${BYTES}B (budget 40000)"
-	[ "$BYTES" -lt 40000 ] || { say "  FAIL budget"; FAIL=1; }
+	say "  shell gzip ≈ ${BYTES}B (budget 44000)"
+	[ "$BYTES" -lt 44000 ] || { say "  FAIL budget"; FAIL=1; }
+fi
+
+# 5. OpenWrt 24+/25+ compatibility, contrast, palette-boot, QR & map-graph harnesses
+if command -v node >/dev/null; then
+	for suite in contrast-check.js palette-boot-check.js qr-roundtrip.js map-graph-check.js openwrt-24-25-check.js; do
+		if [ -f "$ROOT/smoke/$suite" ]; then
+			command node "$ROOT/smoke/$suite" >/dev/null && say "  ok  smoke $suite" || { say "  FAIL smoke $suite"; FAIL=1; }
+		fi
+	done
 fi
 
 say ""

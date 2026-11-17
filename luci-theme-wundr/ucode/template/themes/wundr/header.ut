@@ -15,17 +15,22 @@
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="{{ media }}/brand-mark.svg" type="image/svg+xml">
   <script>
-    /* Apply the saved appearance before first paint to avoid a light/dark flash. */
+    /* Apply the saved studio finish & polarity before first paint (zero FOUC). */
     (function () {
       try {
         var t = localStorage.getItem('wb-theme');
         if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
-        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        var s = localStorage.getItem('wb-studio');
+        if (s !== 'current' && s !== 'nordic' && s !== 'kyoto') s = 'nordic';
+        var r = document.documentElement;
+        r.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        r.setAttribute('data-studio', s);
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="{{ media }}/cascade.css?v=0.2.0">
-  <link rel="stylesheet" href="{{ media }}/app.css?v=0.2.0">
+  <script src="{{ media }}/palette-boot.js"></script>
+  <link rel="stylesheet" href="{{ media }}/cascade.css">
+  <link rel="stylesheet" href="{{ media }}/app.css">
   {% if (dispatched?.css): %}
   <link rel="stylesheet" href="{{ resource }}/{{ dispatched.css }}">
   {% endif %}
@@ -34,18 +39,18 @@
   {% endif %}
   <script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
   <script src="{{ resource }}/cbi.js"></script>
-  <script src="{{ media }}/icons.js?v=0.2.0"></script>
-  <script src="{{ media }}/charts.js?v=0.2.0"></script>
-  <script src="{{ media }}/qr.js?v=0.2.0"></script>
-  <script src="{{ media }}/map-graph.js?v=0.2.0"></script>
+  <script src="{{ media }}/icons.js"></script>
+  <script src="{{ media }}/charts.js"></script>
+  <script src="{{ media }}/qr.js"></script>
+  <script src="{{ media }}/map-graph.js"></script>
 </head>
-<body class="lang_{{ dispatcher.lang }} wundr" data-page="{{ entityencode(join('-', length(ctx.request_path) ? ctx.request_path : ctx.path), true) }}">
+<body class="lang_{{ dispatcher.lang }} wundr" data-page="{{ entityencode(join('-', length(ctx.path) ? ctx.path : ctx.request_path), true) }}">
   {% if (!blank_page): %}
   <header class="wb-topbar">
     <button class="wb-navtoggle" type="button" aria-label="{{ _('Toggle navigation') }}" aria-controls="wb-sidenav" aria-expanded="false">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
-    <a class="wb-brand" href="{{ dispatcher.build_url('wundr/dashboard') }}" aria-label="{{ _('Wundr dashboard') }}">
+    <a class="wb-brand" href="{{ dispatcher.build_url(dispatcher.lookup('wundr/dashboard') ? 'wundr/dashboard' : 'admin/status/overview') }}" aria-label="{{ _('Wundr dashboard') }}">
       <svg class="wb-logo" viewBox="0 0 40 44" aria-hidden="true"><path class="wb-logo-wave" d="M6 12a19 19 0 0 1 28 0"/><path class="wb-logo-wave wb-logo-wave-2" d="M11 18a12 12 0 0 1 18 0"/><path class="wb-logo-frame" d="M16 24a5.5 5.5 0 0 1 8 0"/><path class="wb-logo-path" d="M9 26l4 11 7-14 7 14 4-11"/></svg>
       <span class="wb-brand-text">Wundr<small>{{ striptags(boardinfo.hostname ?? '') }}</small></span>
     </a>
@@ -58,7 +63,7 @@
     <div class="wb-statusrail" id="wb-statusrail" aria-live="off"></div>
     <div id="indicators" class="wb-indicators"></div>
     <div class="wb-palette-wrapper">
-      <button class="wb-icon-btn" id="wb-palette-btn" type="button" aria-label="{{ _('Choose color palette') }}" title="{{ _('Color palette') }}" aria-haspopup="true" aria-expanded="false">
+      <button class="wb-icon-btn" id="wb-palette-btn" type="button" aria-label="{{ _('Appearance and studio style') }}" title="{{ _('Studio style & palette') }}" aria-haspopup="true" aria-expanded="false">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".6" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".6" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".6" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".6" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
       </button>
       <div class="wb-popover" id="wb-palette-popover" hidden></div>
@@ -74,40 +79,72 @@
   <div class="wb-shell">
     <nav class="wb-sidenav" id="wb-sidenav" aria-label="{{ _('Main navigation') }}">
       <ul class="wb-nav">
+        {% if (dispatcher.lookup('wundr/dashboard')): %}
         <li><a href="{{ dispatcher.build_url('wundr/dashboard') }}" data-nav="wundr/dashboard"><span class="wb-nav-ico" data-icon="dashboard"></span><span>{{ _('Dashboard') }}</span></a></li>
+        {% endif %}
+        {% if (dispatcher.lookup('wundr/internet')): %}
         <li><a href="{{ dispatcher.build_url('wundr/internet') }}" data-nav="wundr/internet"><span class="wb-nav-ico" data-icon="internet"></span><span>{{ _('Internet') }}</span></a></li>
+        {% endif %}
 
+        {% if (dispatcher.lookup('wundr/network/overview')): %}
         <li class="wb-nav-group is-open" data-nav-group="network">
           <button class="wb-nav-group-toggle" type="button" aria-expanded="true" aria-controls="wb-nav-network"><span class="wb-nav-ico" data-icon="port"></span><span>{{ _('Network') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
           <ul class="wb-nav-sub" id="wb-nav-network">
-            <li><a href="{{ dispatcher.build_url('wundr/network/overview') }}" data-nav="wundr/network/overview wundr/network/lan-config wundr/network/mode"><span>{{ _('Overview') }}</span></a></li>
+            <li><a href="{{ dispatcher.build_url('wundr/network/overview') }}" data-nav="wundr/network/overview"><span>{{ _('Overview') }}</span></a></li>
+            {% if (dispatcher.lookup('wundr/network/lan-config')): %}
+            <li><a href="{{ dispatcher.build_url('wundr/network/lan-config') }}" data-nav="wundr/network/lan-config"><span>{{ _('LAN & DHCP') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/mode')): %}
+            <li><a href="{{ dispatcher.build_url('wundr/network/mode') }}" data-nav="wundr/network/mode"><span>{{ _('VLANs & Segments') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/wifi')): %}
             <li><a href="{{ dispatcher.build_url('wundr/network/wifi') }}" data-nav="wundr/network/wifi wundr/network/wifi-config"><span>{{ _('Wi-Fi') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/devices')): %}
             <li><a href="{{ dispatcher.build_url('wundr/network/devices') }}" data-nav="wundr/network/devices"><span>{{ _('Devices') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/map')): %}
             <li><a href="{{ dispatcher.build_url('wundr/network/map') }}" data-nav="wundr/network/map"><span>{{ _('Network Map') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/qos')): %}
             <li><a href="{{ dispatcher.build_url('wundr/network/qos') }}" data-nav="wundr/network/qos"><span>{{ _('QoS') }}</span></a></li>
+            {% endif %}
+            {% if (dispatcher.lookup('wundr/network/diagnostics')): %}
             <li><a href="{{ dispatcher.build_url('wundr/network/diagnostics') }}" data-nav="wundr/network/diagnostics"><span>{{ _('Diagnostics') }}</span></a></li>
+            {% endif %}
           </ul>
         </li>
+        {% endif %}
 
+        {% if (dispatcher.lookup('wundr/protection/security') || dispatcher.lookup('wundr/protection/families')): %}
         <li class="wb-nav-group" data-nav-group="protection">
           <button class="wb-nav-group-toggle" type="button" aria-expanded="false" aria-controls="wb-nav-protection"><span class="wb-nav-ico" data-icon="shield"></span><span>{{ _('Protection') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
           <ul class="wb-nav-sub" id="wb-nav-protection">
+            {% if (dispatcher.lookup('wundr/protection/security')): %}
             <li><a href="{{ dispatcher.build_url('wundr/protection/security') }}" data-nav="wundr/protection/security"><span>{{ _('Security') }}</span></a></li>
+            {% endif %}
             {% if (dispatcher.lookup('admin/network/firewall')): %}
             <li><a href="{{ dispatcher.build_url('admin/network/firewall') }}" data-nav="admin/network/firewall"><span>{{ _('Firewall (Advanced)') }}</span></a></li>
             {% endif %}
+            {% if (dispatcher.lookup('wundr/protection/families')): %}
             <li><a href="{{ dispatcher.build_url('wundr/protection/families') }}" data-nav="wundr/protection/families"><span>{{ _('Family') }}</span></a></li>
+            {% endif %}
           </ul>
         </li>
+        {% endif %}
 
+        {% if (dispatcher.lookup('wundr/services/apps')): %}
         <li class="wb-nav-group" data-nav-group="services">
           <button class="wb-nav-group-toggle" type="button" aria-expanded="false" aria-controls="wb-nav-services"><span class="wb-nav-ico" data-icon="apps"></span><span>{{ _('Services') }}</span><span class="wb-nav-chevron" aria-hidden="true"></span></button>
           <ul class="wb-nav-sub" id="wb-nav-services">
             <li><a href="{{ dispatcher.build_url('wundr/services/apps') }}" data-nav="wundr/services/apps"><span>{{ _('Apps') }}</span></a></li>
           </ul>
         </li>
+        {% endif %}
 
+        {% if (dispatcher.lookup('wundr/system')): %}
         <li><a href="{{ dispatcher.build_url('wundr/system') }}" data-nav="wundr/system"><span class="wb-nav-ico" data-icon="system"></span><span>{{ _('System') }}</span></a></li>
+        {% endif %}
       </ul>
       <div class="wb-pro">
         <button class="wb-pro-toggle" id="wb-pro-toggle" type="button" aria-controls="wb-pro-drawer" aria-expanded="false">

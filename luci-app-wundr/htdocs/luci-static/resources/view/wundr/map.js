@@ -53,9 +53,10 @@ return view.extend({
 
 		function ifaceOf(zone) { return splitList(zone.get('network'))[0] || ''; }
 		function cidrOf(i) {
-			var ip = uci.get('network', i, 'ipaddr'), mask = uci.get('network', i, 'netmask');
+			var ip = L.toArray(uci.get('network', i, 'ipaddr'))[0] || '', mask = uci.get('network', i, 'netmask');
 			if (!ip) return '';
-			return mask ? ip + '/' + mask : ip;
+			if (String(ip).indexOf('/') > 0) return String(ip);
+			return mask ? ip + '/' + mask : String(ip);
 		}
 
 		var zoneList = zones.map(function(z) {
@@ -89,30 +90,41 @@ return view.extend({
 
 		/* Build policy arrows straight from firewall forwardings + reject rules. */
 		var policies = [];
-		var fwd = {};
+		var blockedMacs = {};
 		uci.sections('firewall', 'forwarding', function(f) {
-			fwd[f.src + '→' + f.dest] = true;
-			if (f.dest === 'wan' && f.src !== 'lan') {
-				/* Only emit a zone→internet arrow for the src itself; the graph
-				 * will draw it when a matching zone node exists. */
-				policies.push({ source: { type: 'zone', id: f.src }, destination: { type: 'internet' }, action: 'allow', name: 'fwd ' + f.src, origin: 'firewall.forwarding' });
-			}
-			if (/^lan$/.test(f.dest) && f.src !== 'wan') {
-				policies.push({ source: { type: 'zone', id: f.src }, destination: { type: 'zone', id: 'lan' }, action: 'allow', name: 'fwd ' + f.src + '→lan', origin: 'firewall.forwarding' });
+			if (!f.src || !f.dest || f.enabled === '0') return;
+			if (f.dest === 'wan') {
+				policies.push({ source: { type: 'zone', id: f.src }, destination: { type: 'internet' }, action: 'allow', name: 'fwd ' + f.src + '→wan', origin: 'firewall.forwarding' });
+			} else if (f.src !== 'wan') {
+				policies.push({ source: { type: 'zone', id: f.src }, destination: { type: 'zone', id: f.dest }, action: 'allow', name: 'fwd ' + f.src + '→' + f.dest, origin: 'firewall.forwarding' });
 			}
 		});
 		uci.sections('firewall', 'rule', function(r) {
-			if (!/^wundr_/.test(String(r.name || ''))) return;
+			if (r.enabled === '0' || !/^wundr_/.test(String(r.name || ''))) return;
 			var macs = splitList(r.src_mac);
 			var act = String(r.target || 'REJECT').toUpperCase();
 			if (act !== 'REJECT' && act !== 'DROP') return;
 			macs.forEach(function(m) {
+				blockedMacs[m.toUpperCase()] = r.name;
 				policies.push({ source: { type: 'device', id: m.toLowerCase() }, destination: { type: 'internet' }, action: 'deny', name: r.name, origin: 'Wundr family' });
 			});
 		});
 
+		var showDenied = Object.keys(blockedMacs).length > 0;
 		var graphMount = E('div', { 'class': 'map-graph-mount' });
 		var graphMetric = E('div', { 'class': 'wb-sub map-graph-metric' });
+		var denyBtn = E('button', {
+			'class': 'wb-btn sm' + (showDenied ? ' active' : ''),
+			'type': 'button',
+			'aria-pressed': String(showDenied),
+			'click': function() {
+				showDenied = !showDenied;
+				denyBtn.classList.toggle('active', showDenied);
+				denyBtn.setAttribute('aria-pressed', String(showDenied));
+				redraw();
+			}
+		}, [ _('Blocked rules') ]);
+
 		function redraw() {
 			if (!window.WBMapGraph) { graphMount.innerHTML = ''; graphMount.appendChild(E('div', { 'class': 'wb-empty' }, [ _('The SVG graph engine did not load.') ])); return; }
 			var res = WBMapGraph.render(graphMount, {
@@ -120,9 +132,18 @@ return view.extend({
 				devices: devices,
 				policies: policies.filter(Boolean),
 				observed: [],
+				showDenied: showDenied,
+				onHostClick: function(dev) { if (dev && dev.mac) openClientDetails(dev.mac); },
 				labels: { graph: _('Network topology graph'), internet: _('Internet / WAN'), router: _('Router'), private: _('Private'), internal: _('All clients'), empty: _('No topology data to draw.') }
 			});
-			if (res && res.renderMs != null) graphMetric.textContent = '%d %s · %d %s · %d ms'.format(res.clientCount, _('clients'), res.zoneAllowCount || 0, _('allow edges'), res.renderMs);
+			if (res && res.renderMs != null) {
+				graphMetric.textContent = '%d %s · %d %s · %d %s · %.1f ms'.format(
+					res.clientCount, _('clients'),
+					res.zoneAllowCount || 0, _('allow edges'),
+					res.deniedCount || 0, _('deny rules'),
+					res.renderMs
+				);
+			}
 		}
 		redraw();
 
@@ -141,8 +162,9 @@ return view.extend({
 						ifaces.forEach(function(i) { (byZoneMAC[i] || []).forEach(function(m) { macs.push(m); }); });
 						if (!macs.length) return E('div', { 'class': 'wb-sub' }, [ _('No leases found in this zone.') ]);
 						return macs.slice(0, 12).map(function(m) {
-							return E('button', { 'class': 'map-device', 'type': 'button', 'onclick': function() { openClientDetails(m); } }, [
-								E('span', { 'class': 'map-device-dot' }),
+							var isBlocked = !!blockedMacs[String(m).toUpperCase()];
+							return E('button', { 'class': 'map-device', 'type': 'button', 'click': function() { openClientDetails(m); } }, [
+								E('span', { 'class': 'map-device-dot' + (isBlocked ? ' blocked' : '') }),
 								E('span', {}, [ nameFor[m] || m ]),
 								E('small', {}, [ m ])
 							]);
@@ -155,9 +177,10 @@ return view.extend({
 		function openClientDetails(mac) {
 			var l = leases.filter(function(x) { return x.macaddr === mac; })[0] || {};
 			var iface = l.interface || '';
-			var zone = (zones.filter(function(z) { return splitList(z.get('network')).indexOf(iface) >= 0; })[0] || {}).getName || function() { return iface; };
+			var matchedZone = zones.filter(function(z) { return splitList(z.get('network')).indexOf(iface) >= 0; })[0];
+			var zoneName = matchedZone ? matchedZone.getName() : (iface || '—');
 			ui.showModal(_('Device %s').format(nameFor[mac] || mac), [
-				wb.kv([ [ _('MAC'), mac, 'mono' ], [ _('IPv4'), l.ipaddr || '—', 'mono' ], [ _('Interface'), iface || '—', 'mono' ], [ _('Firewall zone'), zone() ] ]),
+				wb.kv([ [ _('MAC'), mac, 'mono' ], [ _('IPv4'), l.ipaddr || '—', 'mono' ], [ _('Interface'), iface || '—', 'mono' ], [ _('Firewall zone'), zoneName ] ]),
 				E('div', { 'class': 'right' }, [ E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Close') ]) ])
 			]);
 		}
@@ -189,13 +212,25 @@ return view.extend({
 				E('div', { 'class': 'wb-hero-row' }, [
 					wb.stat(String(zoneList.length), _('Zones')),
 					wb.stat(String(devices.length), _('Clients')),
-					wb.stat(String(policies.length), _('Policy arrows'))
-				], [
-					E('a', { 'class': 'wb-btn', 'href': L.url('admin/network/firewall/zones') }, [ _('Zones config') ]),
-					E('a', { 'class': 'wb-btn', 'href': L.url('admin/network/firewall/rules') }, [ _('Rules') ])
+					wb.stat(String(policies.length), _('Policy arrows')),
+					E('div', { 'class': 'wb-hero-actions' }, [
+						E('a', { 'class': 'wb-btn', 'href': L.url('admin/network/firewall/zones') }, [ _('Zones config') ]),
+						E('a', { 'class': 'wb-btn', 'href': L.url('admin/network/firewall/rules') }, [ _('Rules') ])
+					])
 				])
 			]),
-			wb.card(_('Policy graph'), [ graphMount, graphMetric ]),
+			wb.card(_('Policy graph'), [
+				graphMount,
+				E('div', { 'style': 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px' }, [
+					E('div', { 'class': 'map-legend', 'style': 'margin:0' }, [
+						E('span', {}, [ E('i', { 'class': 'legend-dot live' }), _('Active client') ]),
+						E('span', {}, [ E('i', { 'class': 'legend-line allow' }), _('Zone forwarding') ]),
+						E('span', {}, [ E('i', { 'class': 'legend-line deny' }), _('Paused / bedtime block') ]),
+						E('span', {}, [ E('i', { 'class': 'legend-dot isolated' }), _('Isolated segment') ])
+					]),
+					graphMetric
+				])
+			], { actions: denyBtn, class: 'map-graph-card' }),
 			body
 		]);
 	},
