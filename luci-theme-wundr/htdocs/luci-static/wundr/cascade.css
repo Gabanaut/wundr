@@ -225,7 +225,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .wb-popover {
   position: absolute; top: calc(100% + 10px); right: 0; z-index: 130;
   background: var(--wb-surface); border: 1px solid var(--wb-border);
-  border-radius: var(--wb-radius); box-shadow: var(--wb-shadow-lg); padding: 14px; min-width: 276px;
+  border-radius: var(--wb-radius); box-shadow: var(--wb-shadow-lg); padding: 14px; min-width: 298px;
   backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   animation: wb-drop .18s var(--wb-ease);
 }
