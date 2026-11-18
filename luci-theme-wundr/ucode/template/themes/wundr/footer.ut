@@ -3,10 +3,10 @@
     </main>
   </div>
 
-  <aside class="wb-pro-drawer" id="wb-pro-drawer" aria-hidden="true" hidden>
+  <aside class="wb-pro-drawer" id="wb-pro-drawer" role="dialog" aria-modal="true" aria-labelledby="wb-pro-title" aria-hidden="true" hidden>
     <div class="wb-pro-drawer-header">
       <div>
-        <h3>{{ _('Advanced') }}</h3>
+        <h3 id="wb-pro-title">{{ _('Advanced') }}</h3>
         <div class="wb-sub">{{ _('Every native LuCI page, unchanged.') }}</div>
       </div>
       <button class="wb-icon-btn" id="wb-pro-drawer-close" type="button" aria-label="{{ _('Close advanced navigation') }}">

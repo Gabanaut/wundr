@@ -24,10 +24,11 @@ function loadLive() {
 }
 
 function networkLabel(net) {
-	var first = String(net || 'lan').split(/\s+/)[0];
-	if (first === 'lan') return _('Main LAN');
-	var m = /^lan(\d+)$/.exec(first);
-	return m ? _('VLAN') + ' ' + m[1] + ' (' + first + ')' : first;
+	return L.toArray(net).map(function(name) {
+		if (name === 'lan') return _('Main LAN');
+		var match = /^lan(\d+)$/.exec(name);
+		return match ? _('VLAN') + ' ' + match[1] + ' (' + name + ')' : name;
+	}).join(', ') || _('Not attached');
 }
 
 function attachOptions(guest) {
@@ -65,7 +66,8 @@ return view.extend({
 			var map = Object.create(null), order = [];
 			uci.sections('wireless', 'wifi-iface', function(s) {
 				if ((s.mode || 'ap') !== 'ap') return;
-				var key = s.ssid || s['.name'];
+				var fields = Object.keys(s).filter(function(key) { return key[0] !== '.' && key !== 'device'; }).sort();
+				var key = s.ssid ? JSON.stringify(fields.map(function(field) { return [field, s[field]]; })) : s['.name'];
 				if (!map[key]) { map[key] = { ssid: s.ssid || _('Unnamed'), ifaces: [] }; order.push(key); }
 				map[key].ifaces.push(s);
 			});
@@ -89,6 +91,7 @@ return view.extend({
 			var enc = first.encryption || 'none';
 			var isOpen = enc === 'none';
 			var facts = [ wb.encryptionLabel(enc), networkLabel(first.network) ];
+			var scope = networkLabel(first.network) + ' · ' + g.ifaces.map(function(iface) { return iface.device; }).join(', ');
 			if (first.hidden === '1') facts.push(_('Hidden'));
 			if (first.isolate === '1') facts.push(_('Client isolation'));
 
@@ -98,21 +101,21 @@ return view.extend({
 					E('div', { 'class': 'grow' }, [ E('h3', {}, [ g.ssid ]), E('div', { 'class': 'wb-sub' }, [ facts.join(' · ') ]) ]),
 					wb.toggle(anyOn, function(next) {
 						g.ifaces.forEach(function(s) { if (next) uci.unset('wireless', s['.name'], 'disabled'); else uci.set('wireless', s['.name'], 'disabled', '1'); });
-						return wb.apply(true);
-					}, { 'aria-label': _('Enable network') + ' ' + g.ssid })
+						return wb.reviewChanges();
+					}, { 'aria-label': _('Enable %s on %s').format(g.ssid, scope) })
 				]),
 				E('div', { 'class': 'wb-radio-row' }, bands),
 				E('div', { 'class': 'wb-action-row' }, [
 					wb.pill(anyOn ? clients + ' ' + _('connected') : _('Off'), anyOn ? (clients ? 'good' : 'mut') : 'mut'),
 					isOpen ? wb.pill(_('No password'), 'warn') : '',
 					E('span', { 'style': 'flex:1' }),
-					wb.iconButton('qr', _('Share with QR code'), { 'click': function() { shareQr(first); } }),
+					wb.wifiQrType(first) ? wb.iconButton('qr', _('Share with QR code'), { 'click': function() { shareQr(first); } }) : '',
 					wb.iconLink('edit', _('Edit in Wi-Fi Settings'), L.url('wundr/network/wifi-config')),
 					wb.iconButton('trash', _('Delete network'), { 'class': 'wb-icon-btn danger', 'click': function() {
-						wb.confirm(_('Delete “%s”?').format(g.ssid), _('Devices using this network will be disconnected. The change can be rolled back if you lose access.'), { ok: _('Delete'), danger: true }).then(function(yes) {
+						wb.confirm(_('Delete “%s”?').format(g.ssid), _('Remove %d access point(s): %s. Other networks with the same name are not included.').format(g.ifaces.length, scope), { ok: _('Review deletion'), danger: true }).then(function(yes) {
 							if (!yes) return;
 							g.ifaces.forEach(function(s) { uci.remove('wireless', s['.name']); });
-							return wb.apply(true).then(rerender);
+							return wb.reviewChanges().then(rerender);
 						});
 					} })
 				])
@@ -121,11 +124,9 @@ return view.extend({
 
 		function shareQr(s) {
 			var canvas = E('canvas');
-			var enc = String(s.encryption || 'none');
-			var type = enc === 'none' || enc === 'owe' ? 'nopass' : 'WPA';
-			var payload = window.WBQR ? WBQR.wifiString(s.ssid, s.key || '', type, s.hidden === '1') : '';
-			if (window.WBQR) WBQR.draw(canvas, payload, { size: 240 });
-			ui.showModal(_('Join “%s”').format(s.ssid), [
+			var type = wb.wifiQrType(s);
+			if (!type || !window.WBQR || !WBQR.draw(canvas, WBQR.wifiString(s.ssid, s.key || '', type, s.hidden === '1'), { size: 240 })) return wb.toast(_('Wi-Fi code unavailable'), _('Join this network manually.'), 'warn');
+			ui.showModal([_('Join “%s”').format(s.ssid)], [
 				E('p', {}, [ _('Scan with a phone camera to connect. The code contains the network name and password.') ]),
 				E('div', { 'class': 'wb-qr' }, [ canvas ]),
 				E('div', { 'class': 'wb-qr-ssid' }, [ s.ssid ]),
@@ -145,7 +146,8 @@ return view.extend({
 				return;
 			}
 			var ssid = wb.input({ 'id': 'wb-new-ssid', 'maxlength': '32', 'placeholder': preset === 'guest' ? _('Guest') : _('My Wi-Fi'), 'value': preset === 'guest' ? _('Guest') : '' });
-			var enc = wb.select([ [ 'sae-mixed', _('WPA2 / WPA3 (recommended)') ], [ 'sae', _('WPA3 only') ], [ 'psk2', _('WPA2 only (older devices)') ], [ 'none', _('Open — no password') ] ], 'sae-mixed', { 'id': 'wb-new-enc' });
+			var sae = L.hasSystemFeature('hostapd', 'sae');
+			var enc = wb.select([], '', { 'id': 'wb-new-enc' });
 			var key = wb.input({ 'id': 'wb-new-key', 'type': 'password', 'minlength': '8', 'maxlength': '63', 'autocomplete': 'new-password' });
 			var attach = wb.select(guest ? [ [ '', _('Choose a segment') ] ].concat(options) : options, guest ? '' : 'lan', { 'id': 'wb-new-net' });
 			var isolate = E('input', { 'type': 'checkbox', 'id': 'wb-new-isolate' });
@@ -153,27 +155,42 @@ return view.extend({
 			var hidden = E('input', { 'type': 'checkbox', 'id': 'wb-new-hidden' });
 			var radioBoxes = radios.map(function(r) {
 				var cb = E('input', { 'type': 'checkbox', 'value': r.getName() });
-				cb.checked = !r.isDisabled();
+				cb.disabled = r.get('band') === '6g' && !sae;
+				cb.checked = !cb.disabled && !r.isDisabled();
+				cb.addEventListener('change', updateModes);
 				return E('label', {}, [ cb, ' ', wb.bandLabel(r.get('band')), E('small', {}, [ r.getName() ]) ]);
 			});
+			function selectedRadios() { return radios.filter(function(radio, index) { return radioBoxes[index].querySelector('input').checked; }); }
+			function allowedModes() {
+				if (selectedRadios().some(function(radio) { return radio.get('band') === '6g'; })) return sae ? ['sae'] : [];
+				return (sae ? ['sae-mixed', 'sae'] : []).concat(['psk2', 'none']);
+			}
+			function updateModes() {
+				var modes = allowedModes(), selected = modes.includes(enc.value) ? enc.value : modes[0];
+				dom.content(enc, modes.map(function(mode) { return E('option', { 'value': mode }, [ wb.encryptionLabel(mode) ]); }));
+				enc.value = selected || ''; key.disabled = enc.value === 'none';
+			}
+			updateModes();
 			enc.addEventListener('change', function() { key.disabled = enc.value === 'none'; });
 
 			wb.formModal(preset === 'guest' ? _('Create guest network') : _('Create Wi-Fi network'), [
 				{ label: _('Network name'), node: ssid, help: _('The name people see when they look for Wi-Fi (SSID).') },
+				{ label: _('Bands'), node: E('div', { 'class': 'wb-checklist' }, radioBoxes) },
 				{ label: _('Security'), node: enc },
 				{ label: _('Password'), node: key, desc: _('8–63 characters.') },
 				{ label: _('Access'), node: attach, desc: guest ? _('Only segments with restricted firewall defaults are listed. Individual firewall rules can grant additional access.') : _('The selected network determines which firewall rules apply.') },
-				{ label: _('Bands'), node: E('div', { 'class': 'wb-checklist' }, radioBoxes) },
 				{ label: _('Options'), node: E('div', { 'style': 'display:grid;gap:6px' }, [
 					E('label', {}, [ isolate, ' ', _('Isolate clients on the same access point') ]),
 					E('label', {}, [ hidden, ' ', _('Hide network name') ])
 				]) }
 			], function() {
 				var name = ssid.value.trim();
-				if (!name) throw new Error(_('Please enter a network name.'));
+				if (!name || new TextEncoder().encode(name).length > 32) throw new Error(_('The network name must be 1–32 bytes.'));
 				if (!attachOptions(guest).some(function(option) { return option[0] === attach.value; })) throw new Error(_('Choose an available network segment.'));
-				if (enc.value !== 'none' && key.value.length < 8) throw new Error(_('The password needs at least 8 characters.'));
-				var chosen = radioBoxes.map(function(l) { return l.querySelector('input'); }).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
+				if (!allowedModes().includes(enc.value)) throw new Error(_('Choose security supported by every selected band.'));
+				var keyBytes = new TextEncoder().encode(key.value).length;
+				if (enc.value !== 'none' && (keyBytes < 8 || keyBytes > 63)) throw new Error(_('The password must be 8–63 bytes.'));
+				var chosen = selectedRadios().map(function(radio) { return radio.getName(); });
 				if (!chosen.length) throw new Error(_('Select at least one band.'));
 				chosen.forEach(function(radio) {
 					var sid = uci.add('wireless', 'wifi-iface');
@@ -182,12 +199,13 @@ return view.extend({
 					uci.set('wireless', sid, 'ssid', name);
 					uci.set('wireless', sid, 'network', attach.value);
 					uci.set('wireless', sid, 'encryption', enc.value);
+					if (enc.value === 'sae') uci.set('wireless', sid, 'ieee80211w', '2');
 					if (enc.value !== 'none') uci.set('wireless', sid, 'key', key.value);
 					if (isolate.checked) uci.set('wireless', sid, 'isolate', '1');
 					if (hidden.checked) uci.set('wireless', sid, 'hidden', '1');
 					uci.unset('wireless', radio, 'disabled');
 				});
-				return wb.apply(true).then(rerender);
+				return wb.reviewChanges().then(rerender);
 			}, { ok: _('Create') });
 		}
 
@@ -204,7 +222,7 @@ return view.extend({
 					wb.pill(on ? (r.isUp() ? _('On') : _('Starting')) : _('Off'), on ? (r.isUp() ? 'good' : 'warn') : 'mut'),
 					wb.toggle(on, function(next) {
 						if (next) uci.unset('wireless', name, 'disabled'); else uci.set('wireless', name, 'disabled', '1');
-						return wb.apply(true);
+						return wb.reviewChanges();
 					}, { 'aria-label': _('Enable radio') + ' ' + name })
 				]),
 				wb.kv([

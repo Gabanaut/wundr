@@ -1,32 +1,10 @@
 'use strict';
 'require view';
 'require uci';
-'require rpc';
 'require poll';
 'require dom';
-'require network';
-'require ui';
-'require form';
-'require tools.widgets as widgets';
 'require wundr.ui as wb';
-
-/* Wundr Family — parental controls that work on stock OpenWrt.
- *
- * Each member of the household gets a member profile that groups their
- * devices (a person typically owns several). Enforcement is derived firewall
- * state, written through LuCI's own UCI + apply path (validated, atomic,
- * rollback-capable):
- *   • Pause    → rule `wundr_pause_<id>`   (lan→wan REJECT for those MACs).
- *   • Bedtime  → rule `wundr_bedtime_<id>`  same, PLUS fw4 time options
- *                (weekdays / start_time / stop_time) so the window is enforced
- *                by the router itself, even with this page closed.
- * Member profiles live in /etc/config/wundr as `family` sections. Wundr owns
- * only the `wundr_*` rules and rebuilds them from the profiles on every save,
- * so an edit can never strand a stale rule. Nothing is written outside
- * LuCI's own path. */
-
-var callHints = rpc.declare({ object: 'luci-rpc', method: 'getHostHints', expect: { '': {} } });
-var callLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases', expect: { '': {} } });
+'require wundr.policy as policy';
 
 var DAYS = [ 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun' ];
 var DAY_LABEL = { Mon: _('Mon'), Tue: _('Tue'), Wed: _('Wed'), Thu: _('Thu'), Fri: _('Fri'), Sat: _('Sat'), Sun: _('Sun') };
@@ -37,74 +15,37 @@ function macsOf(p) {
 	return list.filter(Boolean).map(function(m) { return String(m).toUpperCase(); });
 }
 function splitList(v) { return Array.isArray(v) ? v : (v ? String(v).trim().split(/\s+/) : []); }
-function hm(v) { var m = /^(\d{1,2}):(\d{2})/.exec(String(v || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
-function inBedtimeWindow(p) {
-	if (p.mode !== 'schedule') return false;
-	var s = hm(p.bedtime_start), e = hm(p.bedtime_end);
-	if (s == null || e == null) return false;
-	var days = splitList(p.bedtime_days);
-	if (days.length && days.indexOf(DAYS[(new Date().getDay() + 6) % 7]) < 0) return false;
-	var now = new Date(), m = now.getHours() * 60 + now.getMinutes();
-	return s <= e ? (m >= s && m < e) : (m >= s || m < e);
-}
-
-/* Rebuild every Wundr-managed rule from the member profiles (idempotent). */
-function syncFirewall() {
-	uci.sections('firewall', 'rule', function(r) {
-		if (/^wundr_(pause|bedtime)_/.test(String(r.name || ''))) uci.remove('firewall', r['.name']);
-	});
-	uci.sections('wundr', 'family', function(p) {
-		var macs = macsOf(p);
-		if (!macs.length) return;
-		var kind = p.state_paused === '1' ? 'pause' : (p.mode === 'schedule' ? 'bedtime' : null);
-		if (!kind) return;
-		var cid = uci.add('firewall', 'rule');
-		uci.set('firewall', cid, 'name', ruleName(p['.name'], kind));
-		uci.set('firewall', cid, 'comment', 'Wundr · %s · %s'.format(kind, p.name || p['.name']));
-		uci.set('firewall', cid, 'src', 'lan');
-		uci.set('firewall', cid, 'dest', 'wan');
-		uci.set('firewall', cid, 'proto', 'all');
-		uci.set('firewall', cid, 'target', 'REJECT');
-		uci.set('firewall', cid, 'src_mac', macs);
-		if (kind === 'bedtime') {
-			var days = splitList(p.bedtime_days);
-			uci.set('firewall', cid, 'weekdays', (days.length ? days : DAYS).join(' '));
-			uci.set('firewall', cid, 'start_time', (p.bedtime_start || '21:00') + ':00');
-			uci.set('firewall', cid, 'stop_time', (p.bedtime_end || '07:00') + ':00');
-		}
-	});
+function ruleNames(sid) { return [ruleName(sid, 'pause'), ruleName(sid, 'bedtime')]; }
+function schedule(days, start, end) {
+	var first = { weekdays: days.join(' '), start_time: start + ':00', stop_time: end + ':00' };
+	if (start < end) return [first];
+	first.stop_time = '23:59:59';
+	return [ first, { weekdays: days.map(function(day) { return DAYS[(DAYS.indexOf(day) + 1) % 7]; }).join(' '), start_time: '00:00:00', stop_time: end + ':00' } ];
 }
 
 return view.extend({
 	load: function() {
 		return Promise.all([
-			uci.load('wundr'), uci.load('firewall'),
-			L.resolveDefault(callHints(), {}),
-			L.resolveDefault(callLeases(), {})
+			uci.load('wundr'), wb.hostHints(), policy.read()
 		]);
 	},
 
 	render: function(data) {
-		var hints = data[2] || {}, leaseTree = data[3] || {};
-		var names = {};
-		Object.keys(hints).forEach(function(mac) { if (hints[mac] && hints[mac].name) names[mac.toUpperCase()] = hints[mac].name; });
-		(function walk(o) {
-			Object.keys(o).forEach(function(k) {
-				var v = o[k];
-				if (v && typeof v === 'object') {
-					if (v.macaddr) names[v.macaddr.toUpperCase()] = names[v.macaddr.toUpperCase()] || v.hostname || null;
-					else walk(v);
-				}
-			});
-		})(leaseTree);
+		var hints = data[1] || {}, state = data[2], names = Object.create(null);
+		Object.keys(hints).forEach(function(mac) { names[mac.toUpperCase()] = (hints[mac] || {}).name || null; });
+		(state.leases || []).forEach(function(lease) { if (lease.macaddr) names[lease.macaddr.toUpperCase()] = names[lease.macaddr.toUpperCase()] || lease.hostname || null; });
+		Object.keys(state.stations).forEach(function(mac) { if (!(mac in names)) names[mac] = null; });
 		var knownMacs = Object.keys(names).sort();
 
 		function friendly(mac) { return names[mac] || null; }
 		function statusPill(p) {
-			if (p.state_paused === '1') return wb.pill(_('Paused'), 'bad');
-			if (inBedtimeWindow(p)) return wb.pill(_('Bedtime now'), 'warn');
-			if (p.mode === 'schedule') return wb.pill(_('Bedtime %s').format(p.bedtime_start || '21:00'), 'mut');
-			return wb.pill(_('Active'), 'good');
+			if (p.state_paused !== '1' && p.mode !== 'schedule') return wb.pill(_('No family rule'), 'mut');
+			var paths = policy.targets(macsOf(p), state);
+			if (!paths) return wb.pill(_('Scope unverified'), 'warn');
+			var wanted = ruleName(p['.name'], p.state_paused === '1' ? 'pause' : 'bedtime');
+			var rules = uci.sections('firewall', 'rule').filter(function(rule) { return rule.name === wanted; });
+			var covered = paths.every(function(path) { return path.src_mac.every(function(mac) { return rules.some(function(rule) { return policy.matches(rule, mac, path.src, [path.dest]); }); }); });
+			return covered ? wb.pill(p.state_paused === '1' ? _('Pause configured') : _('Schedule configured'), 'mut') : wb.pill(_('Review rule scope'), 'warn');
 		}
 
 		var body = E('div');
@@ -133,12 +74,12 @@ return view.extend({
 		function rerender() {
 			var list = uci.sections('wundr', 'family');
 			var paused = list.filter(function(p) { return p.state_paused === '1'; }).length;
-			var inBed = list.filter(inBedtimeWindow).length;
+			var scheduled = list.filter(function(p) { return p.mode === 'schedule'; }).length;
 			dom.content(body, [
-				wb.hero(_('Family'), _('One profile per person groups all of their devices — pause them instantly or set a bedtime the firewall enforces itself.'), [
+				wb.hero(_('Family'), _('WAN access rules by person. Schedules use the router clock.'), [
 					wb.stat(String(list.length), _('Members')),
-					wb.stat(String(paused), _('Paused now')),
-					wb.stat(String(inBed), _('In bedtime'))
+					wb.stat(String(paused), _('Pause profiles')),
+					wb.stat(String(scheduled), _('Schedules'))
 				], [ E('button', { 'class': 'wb-btn primary', 'click': function() { openEditor(null); } }, [ wb.iconLabel('plus', _('Add member')) ]) ]),
 				list.length ? E('div', { 'class': 'wb-grid' }, list.map(memberCard))
 					: wb.empty(_('No members yet. Add one, tick their devices, then pause or schedule their internet in one tap.'), 'families',
@@ -150,22 +91,29 @@ return view.extend({
 
 		function togglePause(p) {
 			var going = p.state_paused !== '1';
-			if (going) uci.set('wundr', p['.name'], 'state_paused', '1'); else uci.unset('wundr', p['.name'], 'state_paused');
-			syncFirewall();
-			return wb.apply(false)
-				.then(reloadUci).then(rerender)
-				.catch(function() {
-					if (going) uci.unset('wundr', p['.name'], 'state_paused'); else uci.set('wundr', p['.name'], 'state_paused', '1');
-					syncFirewall(); return uci.load('wundr').then(rerender);
-				});
+			return policy.read().then(function(current) {
+				state = current;
+				var sid = p['.name'], name = ruleName(sid, 'pause');
+				var bedtime = ruleName(sid, 'bedtime');
+				var restore = !going && p.mode === 'schedule' && !uci.sections('firewall', 'rule').some(function(rule) { return rule.name === bedtime; });
+				var paths = going || restore ? policy.targets(macsOf(p), state) : [];
+				if (!paths) { rerender(); return wb.toast(_('Cannot place every device'), _('A known client zone and uplink are required for a pause rule.'), 'warn'); }
+				if (going) uci.set('wundr', sid, 'state_paused', '1'); else uci.unset('wundr', sid, 'state_paused');
+				if (restore) {
+					var days = splitList(p.bedtime_days);
+					policy.replaceRules([bedtime], bedtime, paths, schedule(days.length ? days : DAYS, p.bedtime_start || '21:00', p.bedtime_end || '07:00'));
+				}
+				policy.replaceRules([name], name, going ? paths : []);
+				return wb.reviewChanges().then(reloadUci).then(rerender);
+			}).catch(function() { rerender(); });
 		}
 
 		function removeMember(p) {
-			wb.confirm(_('Remove “%s”?').format(p.name || p['.name']), _('This member profile and its pause or bedtime firewall rule are removed. Their devices keep normal internet access.')).then(function(yes) {
+			wb.confirm(_('Remove “%s”?').format(p.name || p['.name']), _('Only this profile and its Wundr rules will be removed. Other access rules stay in place.')).then(function(yes) {
 				if (!yes) return;
 				uci.remove('wundr', p['.name']);
-				syncFirewall();
-				return wb.apply(false).then(reloadUci).then(rerender);
+				policy.replaceRules(ruleNames(p['.name']), null, []);
+				return wb.reviewChanges().then(reloadUci).then(rerender);
 			});
 		}
 
@@ -178,16 +126,17 @@ return view.extend({
 			var mode = wb.select([ [ 'unlimited', _('Always allowed') ], [ 'schedule', _('Bedtime window (firewall schedule)') ] ], p.mode || 'unlimited');
 			var start = wb.input({ 'type': 'time', 'value': p.bedtime_start || '21:00' });
 			var end = wb.input({ 'type': 'time', 'value': p.bedtime_end || '07:00' });
-			var chosen = Array.isArray(p.bedtime_days) && p.bedtime_days.length ? p.bedtime_days : DAYS;
+			var chosen = splitList(p.bedtime_days);
+			if (!chosen.length) chosen = DAYS;
 			var dayBoxes = DAYS.map(function(d) {
 				var cb = E('input', { 'type': 'checkbox', 'value': d });
 				cb.checked = chosen.indexOf(d) >= 0;
 				return E('label', { 'style': 'display:inline-flex;align-items:center;gap:5px;margin:2px 12px 2px 0;font-weight:600' }, [ cb, document.createTextNode(DAY_LABEL[d]) ]);
 			});
-			var mine = {}; macsOf(p).forEach(function(m) { mine[m] = true; });
-			var deviceList = E('div', { 'class': 'wb-checklist' }, knownMacs.length ? knownMacs.map(function(mac) {
-				var cb = E('input', { 'type': 'checkbox', 'value': mac }); cb.checked = !!mine[mac];
-				return E('label', { 'title': mac }, [ cb, E('span', { 'class': 'grow' }, [ friendly(mac) || _('Unnamed device') ]), E('small', {}, [ mac ]) ]);
+			var mine = macsOf(p), choices = Array.from(new Set(mine.concat(knownMacs))).sort();
+			var deviceList = E('div', { 'class': 'wb-checklist' }, choices.length ? choices.map(function(mac) {
+				var cb = E('input', { 'type': 'checkbox', 'value': mac }); cb.checked = mine.includes(mac);
+				return E('label', { 'title': mac }, [ cb, E('span', { 'class': 'grow' }, [ friendly(mac) || (knownMacs.includes(mac) ? _('Unnamed device') : _('Not currently seen')) ]), E('small', {}, [ mac ]) ]);
 			}) : [ E('div', { 'class': 'wb-sub', 'style': 'padding:10px' }, [ _('No devices seen yet — connect one, or add a MAC manually below.') ]) ]);
 			var extra = wb.input({ 'placeholder': _('aa:bb:cc:dd:ee:ff (optional)'), 'type': 'text' });
 			function syncBlocks() {
@@ -205,37 +154,56 @@ return view.extend({
 				{ label: _('Days'), node: E('div', { 'style': 'display:flex;flex-wrap:wrap;max-width:420px' }, dayBoxes) },
 				{ label: _('Devices'), node: deviceList, desc: _('Tick every device that belongs to this member — phones, laptops, consoles.') },
 				{ label: _('Extra MAC'), node: extra }
-			], function() {
+			], async function(stillOpen) {
 				if (!name.value.trim()) throw new Error(_('Please give the member a name.'));
-				var macs = Array.prototype.map.call(deviceList.querySelectorAll('input:checked'), function(cb) { return cb.value; });
+				var macs = Array.from(deviceList.querySelectorAll('input')).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
 				var ex = (extra.value || '').trim().toUpperCase();
 				if (ex) {
 					if (!/^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/.test(ex)) throw new Error(_('“%s” is not a MAC address.').format(extra.value.trim()));
 					ex = ex.replace(/-/g, ':');
 					if (macs.indexOf(ex) < 0) macs.push(ex);
 				}
-				var modeVal = mode.value; /* disabled selects still expose .value */
-				if (sid == null) sid = uci.add('wundr', 'family');
+				var modeVal = mode.value;
+				var days = dayBoxes.map(function(label) { return label.querySelector('input'); }).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
+				if (modeVal === 'schedule') {
+					var time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+					if (!time.test(start.value) || !time.test(end.value) || start.value === end.value) throw new Error(_('Choose distinct start and end times.'));
+					if (!days.length) throw new Error(_('Choose at least one weekday.'));
+				}
+				var changed = !existing || macs.slice().sort().join() !== mine.slice().sort().join() || modeVal !== p.mode || (modeVal === 'schedule' && (start.value !== p.bedtime_start || end.value !== p.bedtime_end || days.join() !== chosen.join()));
+				var paths = [];
+				if (changed && (modeVal === 'schedule' || p.state_paused === '1')) {
+					state = await policy.read();
+					if (!stillOpen()) return;
+					paths = policy.targets(macs, state);
+					if (!paths) throw new Error(_('Every selected device needs a known client zone and uplink before its rule can be changed.'));
+				}
+				if (sid == null) {
+					var index = 1;
+					while (uci.get('wundr', 'member' + index)) index++;
+					sid = uci.add('wundr', 'family', 'member' + index);
+				}
 				uci.set('wundr', sid, 'name', name.value.trim());
 				uci.set('wundr', sid, 'mode', modeVal);
 				if (macs.length) uci.set('wundr', sid, 'devices', macs); else uci.unset('wundr', sid, 'devices');
 				if (modeVal === 'schedule') {
-					if (!/^\d{1,2}:\d{2}$/.test(start.value) || !/^\d{1,2}:\d{2}$/.test(end.value)) throw new Error(_('Enter both times as HH:MM.'));
 					uci.set('wundr', sid, 'bedtime_start', start.value);
 					uci.set('wundr', sid, 'bedtime_end', end.value);
-					var days = dayBoxes.map(function(l) { return l.querySelector('input'); }).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
-					uci.set('wundr', sid, 'bedtime_days', days.length ? days : DAYS.slice());
+					uci.set('wundr', sid, 'bedtime_days', days);
 				} else {
 					[ 'bedtime_start', 'bedtime_end', 'bedtime_days' ].forEach(function(k) { uci.unset('wundr', sid, k); });
 				}
-				p.name = name.value.trim(); /* keep status pill honest before rerender */
-				syncFirewall();
-				return wb.apply(false).then(reloadUci).then(rerender);
+				if (changed) {
+					var bedtime = ruleName(sid, 'bedtime'), pause = ruleName(sid, 'pause');
+					policy.replaceRules([bedtime], bedtime, modeVal === 'schedule' ? paths : [], schedule(days, start.value, end.value));
+					policy.replaceRules([pause], pause, p.state_paused === '1' ? paths : []);
+				}
+				return wb.reviewChanges().then(reloadUci).then(rerender);
 			}, { intro: existing ? null : _('A member profile groups one person\'s devices — however many they own — so you can pause or schedule them together.'), ok: existing ? _('Save') : _('Add') });
 		}
 
 		rerender();
-		poll.add(rerender, 60); /* keeps the "Bedtime now" pill accurate as time passes */
+		poll.add(function() { return policy.read().then(function(current) { state = current; rerender(); }); }, 60);
 		return body;
 	},
 

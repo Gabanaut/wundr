@@ -6,6 +6,7 @@ const jsQR = require(path.join(__dirname, '.cache', 'node_modules', 'jsqr'));
 const QR = require(path.join(__dirname, '..', 'luci-theme-wundr', 'htdocs', 'luci-static', 'wundr', 'qr.js'));
 
 const cases = [
+	QR.wifiString('Home-6G', 'example-password', 'SAE', false),
 	'WIFI:T:WPA;S:Home;P:secret123;;',
 	'WIFI:T:WPA;S:My Café Wi-Fi 5G;P:p@ss\\;word:with,specials;H:true;;',
 	'WIFI:T:nopass;S:Open Guest;;',
@@ -28,6 +29,7 @@ function rasterize(qr, scale, quiet) {
 }
 
 let fail = 0;
+if (!cases[0].startsWith('WIFI:T:SAE;')) { console.log('FAIL WPA3-only payload type'); fail++; }
 for (const text of cases) {
 	const qr = QR.encode(text);
 	if (!qr) { console.log('FAIL no encoding for len=' + text.length); fail++; continue; }

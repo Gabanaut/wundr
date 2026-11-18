@@ -16,7 +16,7 @@ OpenWrt 23.05 · 24.10 · 25.12+ &nbsp;·&nbsp; `opkg` & `apk` &nbsp;·&nbsp; Of
 
 <br>
 
-Wundr uses stock LuCI to save router settings. Wi-Fi and VLAN changes use LuCI's checked apply with rollback; quick actions such as pausing a device or adding a port forward apply without that timer. The theme needs no external fonts, CDNs, or background services.
+Wundr uses stock LuCI to save router settings. Guided changes open LuCI's review of the entire pending batch. Nothing in that batch takes effect until you apply it. The theme needs no external fonts, CDNs, or background services.
 
 Install both packages for the full interface, or `luci-theme-wundr` alone to skin stock LuCI.
 
@@ -40,7 +40,7 @@ Switch between three built-in looks, Light or Dark mode, and eight WCAG AA color
     </td>
     <td width="50%">
       <img src="docs/screenshots/classic-dark-security.png" alt="Classic Dark Security">
-      <p align="center"><sub><b>Classic · Dark</b> · Firewall audit &amp; port forwards</sub></p>
+      <p align="center"><sub><b>Classic · Dark</b> · WAN input policy &amp; port forwards</sub></p>
     </td>
   </tr>
 </table>
@@ -49,7 +49,7 @@ Switch between three built-in looks, Light or Dark mode, and eight WCAG AA color
 
 ## Network Map
 
-Shows configured firewall zones, forwardings, and Wundr pause rules alongside reported IPv4 DHCP leases. A lease is not proof that a device is online, and an arrow is not a traffic measurement. Select a client to see its address and zone.
+Select a zone to see its clients and configured paths. The map shows reported IPv4 DHCP leases and applicable firewall rules, not live traffic. Clients without a verified zone stay unassigned.
 
 ![Wundr Network Map](docs/screenshots/network-map.png)
 
@@ -63,7 +63,7 @@ Shows configured firewall zones, forwardings, and Wundr pause rules alongside re
 | **Internet & LAN** | DHCP, PPPoE, Static IP, MAC clone, MTU, IPv6 SLAAC/DHCPv6, and static DHCP leases. |
 | **VLANs** | Guided `802.1Q` bridge-VLAN editor (`br-lan.<vid>`, DHCP pool, firewall zone, port tag matrix). |
 | **Wi-Fi & Devices** | `2.4 / 5 / 6 GHz` (`HT` to `EHT320`), guest Wi-Fi wizard, live dBm signal bars, and device pause. |
-| **Family & Security** | Per-person `fw4` bedtime schedules, firewall posture checks, and quick port forwarding. |
+| **Family & Security** | Per-person bedtime schedules, zone-aware WAN pause rules, uplink input policies, and port forwards. |
 | **QoS, Apps & System** | `cake` / `fq_codel` SQM shaping, service controls (`AdGuard`, `Tailscale`, `WireGuard`, `banIP`), ping/trace, and logs. |
 
 <br>

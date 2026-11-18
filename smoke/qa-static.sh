@@ -144,6 +144,8 @@ else
 	say "  ok  backend has no passive HTTP/DHCP side effect"
 fi
 
+sh "$ROOT/smoke/prerm-check.sh" || FAIL=1
+
 # 4. Size budget: shell payload (cascade+app+shell+icons+charts+qr+map-graph, gz estimate)
 if command -v gzip >/dev/null; then
 	BYTES=$(cat "$ROOT"/luci-theme-wundr/htdocs/luci-static/wundr/*.css \

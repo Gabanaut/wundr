@@ -4,6 +4,7 @@
 'require uci';
 'require dom';
 'require ui';
+'require wundr.ui as wb';
 
 /* Wundr Network Mode — flat LAN vs VLAN-segmented topology.
  *
@@ -528,26 +529,7 @@ return view.extend({
 
 	/* ---- flows ---- */
 
-	/* Upload locally-staged uci changes to the server, then run the
-	   rollback-capable apply. uci.save() is REQUIRED: uci.set() only stages
-	   in browser memory; without save() the apply would commit nothing.
-	   Checked apply gives the 90s connectivity guard — if a VLAN change
-	   locks the user out, the router auto-reverts. A failed save (ACL
-	   rejection, session expiry) surfaces in a modal, mirroring the
-	   native form.Map.save error handling. */
-	applyStaged: function() {
-		return uci.save().then(function() {
-			return ui.changes.apply(true);
-		}).catch(function(e) {
-			ui.showModal(_('Save error'), [
-				E('p', {}, _('An error occurred while saving the configuration:')),
-				E('p', {}, [ E('em', { 'style': 'white-space:pre-wrap' }, (e && e.message) || String(e)) ]),
-				E('div', { 'class': 'right' }, [
-					E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Dismiss') ])
-				])
-			]);
-		});
-	},
+	applyStaged: wb.reviewChanges,
 
 	enableVlanMode: function(bridgeSection) {
 		if (!bridgeSection) {

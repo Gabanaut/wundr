@@ -633,6 +633,12 @@
 			var g = svg('g', { 'class': cls, 'data-node-id': item.id });
 
 			if (item.kind === 'zone') {
+				if (typeof options.onZoneClick === 'function') {
+					g.setAttribute('role', 'button'); g.setAttribute('tabindex', '0');
+					g.setAttribute('aria-label', item.zone.name || item.zone.id);
+					g.addEventListener('click', function () { options.onZoneClick(item.zone); });
+					g.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); options.onZoneClick(item.zone); } });
+				}
 				if (isIso) g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r + 5, 'class': 'map-graph-zone-ring' }));
 				g.appendChild(svg('circle', { cx: item.x, cy: item.y, r: item.r, 'class': 'map-graph-circle' }));
 				addText(g, item.x, item.y - item.r - (isIso ? 14 : 10), item.zone.name || item.zone.id, 'map-graph-zone-label', { 'text-anchor': 'middle' });

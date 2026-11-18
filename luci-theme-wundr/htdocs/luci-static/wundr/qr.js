@@ -298,7 +298,7 @@
 	/* Escapes a value for the WIFI: join-string grammar. */
 	function wifiString(ssid, key, type, hidden) {
 		var esc = function (s) { return String(s == null ? '' : s).replace(/([\\;,:"])/g, '\\$1'); };
-		var t = type === 'nopass' ? 'nopass' : (type === 'WEP' ? 'WEP' : 'WPA');
+		var t = ['nopass', 'SAE', 'WEP'].includes(type) ? type : 'WPA';
 		return 'WIFI:T:' + t + ';S:' + esc(ssid) + ';' + (t === 'nopass' ? '' : 'P:' + esc(key) + ';') + (hidden ? 'H:true;' : '') + ';';
 	}
 

@@ -15,7 +15,7 @@
 
 var callInfo = rpc.declare({ object: 'system', method: 'info', expect: { '': {} } });
 var callBoard = rpc.declare({ object: 'system', method: 'board', expect: { '': {} } });
-var callLog = rpc.declare({ object: 'log', method: 'read', params: [ 'lines', 'stream', 'oneshot' ], expect: { log: [] } });
+var callLog = rpc.declare({ object: 'log', method: 'read', params: [ 'lines', 'stream', 'oneshot' ], raise: true, expect: { '': {} } });
 var callTZones = rpc.declare({ object: 'luci', method: 'getTimezones', expect: { '': {} } });
 
 function fmt(bytes) {
@@ -29,17 +29,17 @@ function usage(mem) {
 	return { pct: Math.max(0, Math.min(100, Math.round((1 - av / mem.total) * 100))), used: Math.max(0, mem.total - av), total: mem.total };
 }
 function renderLogs(r) {
-	var lines = (r && Array.isArray(r.log)) ? r.log : [];
+	if (!r || !Array.isArray(r.log)) return [ E('div', { 'class': 'wb-empty' }, [_('System log unavailable.')]) ];
+	var lines = r.log.filter(function(item) { return item && typeof item.msg === 'string'; });
 	if (!lines.length) return [ E('div', { 'class': 'wb-empty' }, [ _('No log entries reported yet.') ]) ];
-	return lines.map(function(item) {
-		var msg = typeof item === 'string' ? item : ((item && item.message) || '');
-		var lvl = 'notice';
-		if (/error|crit|alert|emerg|panic|fail|refused|denied/i.test(msg)) lvl = 'error';
-		else if (/warn/i.test(msg)) lvl = 'warn';
+	return lines.slice().reverse().map(function(item) {
+		var severity = Number.isInteger(item.priority) ? item.priority & 7 : null;
+		var lvl = severity != null && severity <= 3 ? 'error' : severity === 4 ? 'warn' : 'notice';
+		var label = ['emerg','alert','crit','error','warn','notice','info','debug'][severity] || _('Unknown');
+		var stamp = item.time != null ? new Date(Number(item.time)) : null;
 		return E('div', { 'class': 'wb-log-line ' + lvl }, [
-			E('time', {}, [ item && item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : '' ]),
-			E('span', { 'class': 'lvl ' + lvl }, [ lvl ]),
-			E('span', { 'class': 'msg' }, [ [ (item && item.hostname), item && item['logtag'] ? String(item['logtag']).replace(/:$/, '') : '', msg ].filter(Boolean).join(' ') ])
+			E('time', {}, [ stamp && Number.isFinite(stamp.getTime()) ? stamp.toLocaleTimeString() : '' ]),
+			E('span', { 'class': 'lvl ' + lvl }, [ label ]), E('span', { 'class': 'msg' }, [item.msg])
 		]);
 	});
 }
@@ -50,13 +50,13 @@ return view.extend({
 			uci.load('system'),
 			L.resolveDefault(callBoard(), {}),
 			L.resolveDefault(callInfo(), {}),
-			L.resolveDefault(callLog(220, false, true), {}).catch(function() { return { log: [] }; }),
+			L.resolveDefault(callLog(220, false, true), null),
 			L.resolveDefault(callTZones(), {})
 		]);
 	},
 
 	render: function(data) {
-		var board = data[1] || {}, info = data[2] || {}, logData = data[3] || { log: [] }, tzMap = data[4] || {};
+		var board = data[1] || {}, info = data[2] || {}, logData = data[3], tzMap = data[4] || {};
 		var rel = board.release || {};
 		var u = usage(info.memory);
 		var load1 = Array.isArray(info.load) ? info.load[0] / 65536 : null;
@@ -177,7 +177,11 @@ return view.extend({
 			]);
 
 			var logBox = E('div', { 'class': 'wb-log' }, renderLogs(logData));
-			function refreshLogs() { return L.resolveDefault(callLog(220, false, true), { log: [] }).then(function(r) { dom.content(logBox, renderLogs(r)); }); }
+			var logStatus = E('div', { 'class': 'wb-sub', 'role': 'status' });
+			function refreshLogs() { return L.resolveDefault(callLog(220, false, true), null).then(function(reply) {
+				if (!reply || !Array.isArray(reply.log)) { logStatus.textContent = _('Could not refresh system log.'); return; }
+				logStatus.textContent = ''; dom.content(logBox, renderLogs(reply));
+			}); }
 
 			poll.add(refreshCounters, 5);
 			poll.add(refreshLogs, 30);
@@ -192,7 +196,7 @@ return view.extend({
 					E('section', { 'class': 'wb-card' }, [ formNode ]),
 					wb.card(_('Maintenance'), [ mt ])
 				]),
-				wb.card(_('Live system log'), [ E('div', { 'class': 'wb-sub', 'style': 'margin-bottom:8px' }, [ _('Recent kernel and daemon messages — new lines auto-refresh.') ]), logBox ])
+				wb.card(_('Live system log'), [ logStatus, logBox ])
 			]);
 		});
 	}

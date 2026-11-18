@@ -242,11 +242,16 @@
 	function initNav() {
 		var shell = d.querySelector('.wb-shell');
 		var toggle = d.querySelector('.wb-navtoggle');
+		var side = d.getElementById('wb-sidenav'), compact = window.matchMedia('(max-width: 900px)');
 		function setDrawer(open) {
 			if (!shell) return;
+			open = !!open && compact.matches;
 			shell.classList.toggle('nav-open', open);
 			if (toggle) toggle.setAttribute('aria-expanded', String(open));
+			if (side) { side.inert = compact.matches && !open; side.setAttribute('aria-hidden', String(side.inert)); }
 		}
+		setDrawer(false);
+		compact.addEventListener('change', function() { setDrawer(false); });
 		if (toggle) toggle.addEventListener('click', function () { setDrawer(!shell.classList.contains('nav-open')); });
 		if (shell) shell.addEventListener('click', function (ev) {
 			/* the ::before backdrop has no node; a click on the shell outside the nav closes the drawer */
@@ -291,21 +296,40 @@
 		var drawer = d.getElementById('wb-pro-drawer');
 		var backdrop = d.getElementById('wb-pro-backdrop');
 		var proClose = d.getElementById('wb-pro-drawer-close');
+		var blocked = [], restoreNav = false;
 		function setPro(open) {
-			if (!drawer) return;
+			if (!drawer || open === !drawer.hidden) return;
+			if (open) { restoreNav = !!shell && compact.matches && shell.classList.contains('nav-open'); setDrawer(false); }
 			drawer.hidden = !open;
 			if (backdrop) backdrop.hidden = !open;
 			drawer.setAttribute('aria-hidden', String(!open));
 			if (proBtn) proBtn.setAttribute('aria-expanded', String(open));
-			if (open) { setDrawer(false); var first = drawer.querySelector('a'); if (first) first.focus(); }
+			if (open) {
+				blocked = [d.querySelector('.wb-topbar'), shell, d.querySelector('.wb-footer')].filter(function(el) { return el && !el.inert; });
+				blocked.forEach(function(el) { el.inert = true; });
+				(proClose || drawer).focus();
+			} else {
+				blocked.forEach(function(el) { el.inert = false; }); blocked = [];
+				if (restoreNav) setDrawer(true);
+				var opener = compact.matches && side && side.inert ? toggle : proBtn;
+				if (opener) opener.focus();
+			}
 		}
 		if (proBtn) proBtn.addEventListener('click', function () { setPro(drawer && drawer.hidden); });
 		if (proClose) proClose.addEventListener('click', function () { setPro(false); });
 		if (backdrop) backdrop.addEventListener('click', function () { setPro(false); });
 		d.addEventListener('keydown', function (ev) {
+			if (d.body.classList.contains('modal-overlay-active')) return;
+			if (drawer && !drawer.hidden && ev.key === 'Tab') {
+				var stops = Array.from(drawer.querySelectorAll('a[href],button:not(:disabled)')).filter(function(el) { return el.getClientRects().length; });
+				var first = stops[0], last = stops[stops.length - 1];
+				if (first && ev.shiftKey && d.activeElement === first) { ev.preventDefault(); last.focus(); }
+				else if (last && !ev.shiftKey && d.activeElement === last) { ev.preventDefault(); first.focus(); }
+				return;
+			}
 			if (ev.key !== 'Escape') return;
-			setPro(false);
-			setDrawer(false);
+			if (drawer && !drawer.hidden) { ev.preventDefault(); setPro(false); return; }
+			if (shell && shell.classList.contains('nav-open')) { setDrawer(false); if (toggle) toggle.focus(); }
 			closePalette();
 			hideSearch();
 		});
@@ -415,7 +439,7 @@
 			if (!box.hidden && !ev.target.closest('.wb-search')) hideSearch();
 		});
 		d.addEventListener('keydown', function (ev) {
-			if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); input.focus(); input.select(); }
+			if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k' && !input.closest('[inert]') && !d.body.classList.contains('modal-overlay-active')) { ev.preventDefault(); input.focus(); input.select(); }
 		});
 	}
 
@@ -424,7 +448,7 @@
 		var rail = d.getElementById('wb-statusrail');
 		if (!rail || !window.L || typeof L.require !== 'function') return;
 
-		var loadChip = chip('cpu', 'CPU', true), memChip = chip('mem', 'RAM', true), wanChip = chip('wan', 'Internet', false);
+		var loadChip = chip('cpu', 'Load', true), memChip = chip('mem', 'RAM', true), wanChip = chip('wan', 'WAN', false);
 		rail.appendChild(wanChip.el); rail.appendChild(loadChip.el); rail.appendChild(memChip.el);
 
 		function chip(id, label, optional) {
@@ -460,15 +484,15 @@
 						memChip.el.title = 'Memory used: ' + pct + '%';
 					}
 					var wan = ifaces.filter(function (i) {
-						return i.up && Array.isArray(i.route) && i.route.some(function (r) { return r.target === '0.0.0.0' && r.mask === 0; });
+						return i.up && Array.isArray(i.route) && i.route.some(function (r) { return (r.target === '0.0.0.0' || r.target === '::') && r.mask === 0; });
 					})[0];
 					if (wan) {
 						var addr = (wan['ipv4-address'] && wan['ipv4-address'][0]) ? wan['ipv4-address'][0].address : '';
-						setChip(wanChip, 'Online', 'ok');
+						setChip(wanChip, 'Link up', 'ok');
 						wanChip.el.title = (wan.interface || 'wan') + (addr ? ' · ' + addr : '');
 					} else {
 						var any = ifaces.filter(function (i) { return /^wan/.test(i.interface || ''); })[0];
-						setChip(wanChip, any && any.pending ? 'Connecting' : 'Offline', any && any.pending ? 'warn' : 'bad');
+						setChip(wanChip, any && any.pending ? 'Connecting' : ifaces.length ? 'No route' : 'Unknown', 'warn');
 						wanChip.el.title = 'No default route';
 					}
 				});

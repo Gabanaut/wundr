@@ -143,16 +143,14 @@ function toggle(checked, onChange, attrs) {
 	return btn;
 }
 
-/* Stage → save → apply. `checked` enables the rollback-protected apply that
- * native LuCI uses for connectivity-affecting changes (IPs, Wi-Fi, VLANs).
- * ui.changes.apply() drives its own progress/error banner; a genuine staged
- * save failure (expired session, ACL rejection) surfaces via the toast. */
-function apply(checked) {
+function reviewChanges() {
 	return uci.save().then(function() {
-		return ui.changes.apply(!!checked);
-	}, function(err) {
+		return ui.changes.init();
+	}).then(function() {
+		return ui.changes.displayChanges();
+	}).catch(function(err) {
 		var msg = (err && err.message) ? err.message : String(err || _('Unknown error'));
-		toast(_('Could not save changes'), msg, 'bad');
+		toast(_('Could not review changes'), msg, 'bad');
 		throw err;
 	});
 }
@@ -160,7 +158,7 @@ function apply(checked) {
 function confirm(title, message, opts) {
 	opts = opts || {};
 	return new Promise(function(resolve) {
-		ui.showModal(title, [
+		ui.showModal([title], [
 			E('p', {}, [ message ]),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); resolve(false); } }, [ opts.cancel || _('Cancel') ]),
@@ -191,11 +189,13 @@ function formModal(title, fields, onSubmit, opts) {
 		]);
 	});
 	var okBtn = E('button', { 'class': 'btn cbi-button-positive' }, [ opts.ok || _('Save') ]);
+	var cancelled = false;
+	function stillOpen() { return !cancelled && modal.contains(okBtn); }
 	okBtn.addEventListener('click', function() {
 		err.textContent = '';
 		okBtn.disabled = true; okBtn.classList.add('spinning');
-		Promise.resolve().then(function() { return onSubmit(); }).then(function() {
-			if (modal.contains(okBtn)) ui.hideModal();
+		Promise.resolve().then(function() { if (stillOpen()) return onSubmit(stillOpen); }).then(function() {
+			if (stillOpen()) ui.hideModal();
 		}).catch(function(e) {
 			err.textContent = e && e.message ? e.message : String(e || _('Unknown error'));
 			okBtn.disabled = false; okBtn.classList.remove('spinning');
@@ -206,7 +206,7 @@ function formModal(title, fields, onSubmit, opts) {
 		E('div', {}, rows),
 		err,
 		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Cancel') ]), ' ', okBtn
+			E('button', { 'class': 'btn', 'click': function() { cancelled = true; ui.hideModal(); } }, [ _('Cancel') ]), ' ', okBtn
 		])
 	]);
 	var first = modal.querySelector('input, select, textarea');
@@ -276,6 +276,13 @@ function encryptionLabel(enc) {
 	if (enc.indexOf('wep') === 0) return 'WEP';
 	return enc.toUpperCase();
 }
+function wifiQrType(section) {
+	var mode = String(section.encryption || 'none').split('+')[0];
+	if (mode === 'none') return 'nopass';
+	if (!section.key || section.wpa_psk_file || section.sae_password_file) return null;
+	if (mode === 'sae') return 'SAE';
+	return ['psk', 'psk2', 'psk-mixed', 'sae-mixed'].includes(mode) ? 'WPA' : null;
+}
 function bandLabel(band, channel) {
 	if (band === '2g') return '2.4 GHz';
 	if (band === '5g') return '5 GHz';
@@ -310,8 +317,8 @@ function pkgLink(attrs, children) {
 return baseclass.extend({
 	icon: icon, iconLabel: iconLabel, iconButton: iconButton, iconLink: iconLink, help: help,
 	pill: pill, stat: stat, percentRing: percentRing, hero: hero, card: card, kv: kv, empty: empty, toast: toast, toggle: toggle,
-	apply: apply, confirm: confirm, formModal: formModal, input: input, select: select,
+	reviewChanges: reviewChanges, confirm: confirm, formModal: formModal, input: input, select: select,
 	fmtBytes: fmtBytes, fmtRate: fmtRate, fmtUptime: fmtUptime, fmtDuration: fmtDuration,
 	signalQuality: signalQuality, sigBars: sigBars, macKey: macKey, encryptionLabel: encryptionLabel, bandLabel: bandLabel,
-	menuHas: menuHas, pkgLink: pkgLink, hostHints: hostHints
+	menuHas: menuHas, pkgLink: pkgLink, hostHints: hostHints, wifiQrType: wifiQrType
 });

@@ -18,21 +18,21 @@ var callRealtime = rpc.declare({ object: 'luci', method: 'getRealtimeStats', par
 var HISTORY = 60;
 
 function wanOf(networks) {
-	return (networks || []).filter(function(n) { return n.isUp(); })[0] || (networks || [])[0] || null;
+	return (networks || []).find(function(net) { return net.isUp(); }) || (networks || [])[0] || null;
 }
 
-function collect() {
-	network.flushCache();
+async function collect() {
+	await network.flushCache();
 	return Promise.all([
 		L.resolveDefault(callSystemInfo(), {}),
 		network.getWANNetworks(),
 		network.getWifiNetworks(),
 		network.getWifiDevices(),
-		L.resolveDefault(callLeases(), {})
+		L.resolveDefault(callLeases(), null), network.getWAN6Networks()
 	]).then(function(res) {
-		var wifiNets = res[2] || [];
-		return Promise.all(wifiNets.map(function(n) { return L.resolveDefault(n.getAssocList(), []); })).then(function(assocs) {
-			return { info: res[0], wans: res[1] || [], wifiNets: wifiNets, radios: res[3] || [], leases: res[4] || {}, assocs: assocs };
+		var wifiNets = (res[2] || []).filter(function(net) { return net.getMode() === 'ap'; });
+		return Promise.all(wifiNets.map(function(n) { return L.resolveDefault(n.getAssocList(), null); })).then(function(assocs) {
+			return { info: res[0], wans: (res[1] || []).concat(res[5] || []), wifiNets: wifiNets, radios: res[3] || [], leases: res[4], assocs: assocs };
 		});
 	});
 }
@@ -68,12 +68,12 @@ return view.extend({
 
 		var statusPill = wb.pill('…', 'mut');
 		var headline = E('h2', { 'class': 'wb-h' }, [ _('Checking your network…') ]);
-		var stWan = wb.stat('—', _('WAN address')), stUp = wb.stat('—', _('Uptime')), stDev = wb.stat('—', _('Devices online')), stCli = wb.stat('—', _('Wi-Fi clients'));
+		var stWan = wb.stat('—', _('WAN address')), stUp = wb.stat('—', _('Uptime')), stDev = wb.stat('—', _('Other leased devices')), stCli = wb.stat('—', _('Wi-Fi clients'));
 		var shareBtn = E('button', { 'class': 'wb-btn primary', 'click': function() { shareWifi(); } }, [ wb.iconLabel('qr', _('Share Wi-Fi')) ]);
 		var hero = E('section', { 'class': 'wb-card wb-hero' }, [
 			E('div', { 'style': 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' }, [ headline, statusPill ]),
 			E('div', { 'class': 'wb-sub' }, [ (board.hostname || 'OpenWrt') + (board.model ? ' · ' + board.model : '') + (board.release && board.release.description ? ' · ' + board.release.description : '') ]),
-			E('div', { 'class': 'wb-hero-row' }, [ stWan, stUp, stDev, stCli, E('div', { 'class': 'wb-hero-actions' }, [
+			E('div', { 'class': 'wb-hero-row' }, [ stWan, stUp, stCli, stDev, E('div', { 'class': 'wb-hero-actions' }, [
 				shareBtn,
 				E('a', { 'class': 'wb-btn', 'href': L.url('wundr/network/diagnostics') }, [ wb.iconLabel('speed', _('Diagnostics')) ])
 			]) ])
@@ -128,16 +128,17 @@ return view.extend({
 			var info = d.info || {};
 			var wan = wanOf(d.wans);
 			var up = !!(wan && wan.isUp());
-			dom.content(headline, [ up ? _('Everything is running smoothly') : (wan && wan.isPending() ? _('Connecting to the internet…') : _('Internet is offline')) ]);
-			dom.content(statusPill, [ up ? _('Online') : _('Offline') ]);
-			statusPill.className = 'wb-pill ' + (up ? 'good' : 'bad');
+			dom.content(headline, [ up ? _('WAN link up') : !wan ? _('WAN link not reported') : wan.isPending() ? _('WAN link connecting') : _('WAN link down') ]);
+			dom.content(statusPill, [ wan ? wan.getName() : _('Unknown') ]);
+			statusPill.className = 'wb-pill ' + (up ? 'good' : wan ? 'warn' : 'mut');
 			dom.content(stWan.firstChild, [ (wan && wan.getIPAddr()) || (wan && wan.getIP6Addr()) || '—' ]);
-			dom.content(stUp.firstChild, [ wb.fmtUptime(info.uptime) ]);
+			dom.content(stUp.firstChild, [ info.uptime != null ? wb.fmtUptime(info.uptime) : '—' ]);
 
 			var dev = wan ? wan.getL3Device() : null;
 			if (dev) {
-				var now = Date.now() / 1000, c = { t: now, rx: dev.getRXBytes(), tx: dev.getTXBytes() };
-				if (lastCounters && c.t > lastCounters.t) {
+				var now = Date.now() / 1000, c = { name: dev.getName(), t: now, rx: dev.getRXBytes(), tx: dev.getTXBytes() };
+				if (lastCounters && lastCounters.name !== c.name) { rx = []; tx = []; }
+				if (lastCounters && lastCounters.name === c.name && c.t > lastCounters.t) {
 					var dt = c.t - lastCounters.t;
 					var r = Math.max(0, (c.rx - lastCounters.rx) / dt), t = Math.max(0, (c.tx - lastCounters.tx) / dt);
 					rx.push(r); tx.push(t);
@@ -145,7 +146,7 @@ return view.extend({
 					if (tx.length > HISTORY) tx.shift();
 				}
 				lastCounters = c;
-			}
+			} else { lastCounters = null; rx = []; tx = []; }
 			dom.content(downVal, [ rx.length ? wb.fmtRate(rx[rx.length - 1]) : '—' ]);
 			dom.content(upVal, [ tx.length ? wb.fmtRate(tx[tx.length - 1]) : '—' ]);
 			draw();
@@ -170,13 +171,12 @@ return view.extend({
 				[ _('Local time'), info.localtime ? new Date(info.localtime * 1000).toLocaleString() : '—' ]
 			]) ]);
 
-			/* Devices online: active leases plus associated Wi-Fi clients */
-			var online = {};
-			((d.leases && d.leases.dhcp_leases) || []).forEach(function(l) { if (l.macaddr) online[l.macaddr.toUpperCase()] = true; });
-			var clients = 0;
-			(d.assocs || []).forEach(function(list) { (list || []).forEach(function(a) { clients++; if (a.mac) online[a.mac.toUpperCase()] = true; }); });
-			dom.content(stDev.firstChild, [ String(Object.keys(online).length) ]);
-			dom.content(stCli.firstChild, [ String(clients) ]);
+			var stations = new Set(), other = new Set(), leases = d.leases && d.leases.dhcp_leases;
+			var measured = d.assocs.every(Array.isArray);
+			d.assocs.forEach(function(list) { (list || []).forEach(function(item) { if (item.mac) stations.add(item.mac.toUpperCase()); }); });
+			(leases || []).forEach(function(lease) { if (lease.macaddr && lease.expires !== 0 && !stations.has(lease.macaddr.toUpperCase())) other.add(lease.macaddr.toUpperCase()); });
+			dom.content(stDev.firstChild, [ measured && Array.isArray(leases) ? String(other.size) : '—' ]);
+			dom.content(stCli.firstChild, [ measured ? String(stations.size) : '—' ]);
 
 			var radioChips = (d.radios || []).map(function(r) {
 				var count = 0;
@@ -198,23 +198,23 @@ return view.extend({
 		}
 
 		function shareWifi() {
-			var nets = uci.sections('wireless', 'wifi-iface').filter(function(s) { return (s.mode || 'ap') === 'ap' && s.disabled !== '1' && s.ssid; });
-			if (!nets.length) { wb.toast(_('No Wi-Fi network to share'), _('Create a network first under Wi-Fi.'), 'warn'); return; }
-			var pick = wb.select(nets.map(function(s) { return [ s['.name'], s.ssid + (s.network && s.network !== 'lan' ? ' (' + s.network + ')' : '') ]; }), nets[0]['.name']);
+			var nets = uci.sections('wireless', 'wifi-iface').filter(function(s) { return (s.mode || 'ap') === 'ap' && s.disabled !== '1' && uci.get('wireless', s.device, 'disabled') !== '1' && s.ssid && wb.wifiQrType(s); });
+			if (!nets.length) { wb.toast(_('No shareable Wi-Fi network'), _('No enabled network with a supported QR credential was reported.'), 'warn'); return; }
+			var pick = wb.select(nets.map(function(s) { return [ s['.name'], [s.ssid, s.device, L.toArray(s.network).join(', ')].filter(Boolean).join(' · ') ]; }), nets[0]['.name'], { 'id': 'wb-share-network' });
 			var canvas = E('canvas');
 			var label = E('div', { 'class': 'wb-qr-ssid' });
 			function redraw() {
 				var s = uci.get('wireless', pick.value) || {};
-				var enc = String(s.encryption || 'none');
-				var type = enc === 'none' || enc === 'owe' ? 'nopass' : 'WPA';
-				if (window.WBQR) WBQR.draw(canvas, WBQR.wifiString(s.ssid, s.key || '', type, s.hidden === '1'), { size: 240 });
-				dom.content(label, [ s.ssid || '' ]);
+				var type = wb.wifiQrType(s);
+				var drawn = type && window.WBQR && WBQR.draw(canvas, WBQR.wifiString(s.ssid, s.key || '', type, s.hidden === '1'), { size: 240 });
+				canvas.hidden = !drawn;
+				dom.content(label, [ drawn ? s.ssid : _('Wi-Fi code unavailable') ]);
 			}
 			pick.addEventListener('change', redraw);
 			redraw();
 			ui.showModal(_('Share Wi-Fi'), [
 				E('p', {}, [ _('Point a phone camera at the code to join instantly.') ]),
-				E('div', { 'class': 'wb-form-row' }, [ E('label', { 'class': 'wb-form-label' }, [ _('Network') ]), pick ]),
+				E('div', { 'class': 'wb-form-row' }, [ E('label', { 'class': 'wb-form-label', 'for': 'wb-share-network' }, [ _('Network') ]), pick ]),
 				E('div', { 'class': 'wb-qr' }, [ canvas ]), label,
 				E('div', { 'class': 'right' }, [ E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Close') ]) ])
 			]);
@@ -222,8 +222,6 @@ return view.extend({
 
 		update(state.data);
 		poll.add(function() { return collect().then(update); }, 3);
-		document.addEventListener('wb-theme-change', draw);
-		window.addEventListener('resize', draw);
 
 		return E('div', {}, [ hero, E('div', { 'class': 'wb-grid cols-2' }, [ trafficCard, healthCard ]), wifiCard, wb.card(_('Quick access'), [ tiles ]) ]);
 	},

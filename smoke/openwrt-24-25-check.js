@@ -492,6 +492,7 @@ function makeMockDOM() {
 		return child;
 	};
 	MockNode.prototype.remove = function () { if (this.parentNode) this.parentNode.removeChild(this); };
+	MockNode.prototype.contains = function (node) { while (node && node !== this) node = node.parentNode; return node === this; };
 	MockNode.prototype.addEventListener = function (ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); };
 	MockNode.prototype.dispatchEvent = function (ev) { (this.listeners[ev.type] || []).forEach(function (fn) { fn(ev); }); };
 	MockNode.prototype.focus = function () {};
@@ -773,6 +774,8 @@ function createLuciSandbox() {
 		getWAN6Networks: function () {
 			return Promise.resolve([{
 				getName: function () { return 'wan6'; },
+				isUp: function () { return true; }, isPending: function () { return false; },
+				getL3Device: function () { return null; }, getIPAddr: function () { return null; },
 				getIP6Addr: function () { return '2001:db8::2/64'; },
 				getIP6Prefix: function () { return '2001:db8:abcd::/48'; },
 				getDNS6Addrs: function () { return ['2606:4700:4700::1111']; }
@@ -801,6 +804,7 @@ function createLuciSandbox() {
 					getTXPower: function () { return 20; },
 					getCountryCode: function () { return 'US'; },
 					getWifiDeviceName: function () { return c.device; },
+					getNetworkNames: function () { return L.toArray(c.network); },
 					getWifiDevice: function () { return networkMod.getWifiDevices().then(function(radios) { return radios.find(function(radio) { return radio.getName() === c.device; }); }); },
 					get: function (k) { return c[k] || null; },
 					isUp: function () { return c.mode === 'ap'; },
@@ -930,7 +934,7 @@ function createLuciSandbox() {
 		hideModal: function () { uiMod.modal = null; },
 		addTimeLimitedNotification: function () {},
 		createHandlerFn: function (ctx, fn) { return typeof fn === 'function' ? fn.bind(ctx) : ctx[fn].bind(ctx); },
-		changes: { apply: function () { return Promise.resolve(); } },
+		changes: { init: function () { return Promise.resolve(); }, displayChanges: function () {}, apply: function () { return Promise.resolve(); } },
 		menu: {
 			load: function () {
 				return Promise.resolve({
@@ -968,7 +972,7 @@ function createLuciSandbox() {
 				if (opts.object === 'rc' && opts.method === 'list')
 					return Promise.resolve({ sqm: { enabled: true, start: 50 }, AdGuardHome: { enabled: false, start: 95 }, firewall: { enabled: true, start: 19 } });
 				if (opts.object === 'log' && opts.method === 'read')
-					return Promise.resolve({ log: [{ timestamp: 1760000000, hostname: 'OpenWrt25', logtag: 'daemon.err:', message: 'sample error test' }] });
+					return Promise.resolve({ log: [{ time: 1760000000000, priority: 27, msg: 'sample log entry' }] });
 				if (opts.object === 'network.device' && opts.method === 'status')
 					return Promise.resolve({ carrier: true, speed: 1000, duplex: 'full' });
 				if (opts.object === 'network.interface' && opts.method === 'dump')
@@ -1010,6 +1014,7 @@ function createLuciSandbox() {
 	};
 
 	var L = {
+		hasSystemFeature: function (name, feature) { return name === 'hostapd' && feature === 'sae'; },
 		env: { dispatchpath: ['admin', 'network', 'firewall', 'zones'], requestpath: ['admin', 'network', 'firewall', 'zones'], sessionid: 'abcd' },
 		url: function () { return '/cgi-bin/luci/' + Array.prototype.slice.call(arguments).join('/'); },
 		resolveDefault: function (p, def) { return Promise.resolve(p).then(function (v) { return v == null ? def : v; }, function () { return def; }); },
@@ -1022,6 +1027,7 @@ function createLuciSandbox() {
 	win._ = function (s) { return String(s); };
 
 	var ctx = vm.createContext({
+		TextEncoder: TextEncoder,
 		document: doc, localStorage: win.localStorage,
 		matchMedia: win.matchMedia, getComputedStyle: win.getComputedStyle,
 		CustomEvent: win.CustomEvent, devicePixelRatio: 1,
@@ -1060,6 +1066,7 @@ function createLuciSandbox() {
 		vm.runInContext(fs.readFileSync(path.join(THEME, 'htdocs', 'luci-static', 'wundr', f), 'utf8'), ctx);
 	});
 	modules['wundr.ui'] = loadLuciModule(path.join(APP, 'htdocs', 'luci-static', 'resources', 'wundr', 'ui.js'));
+	modules['wundr.policy'] = loadLuciModule(path.join(APP, 'htdocs', 'luci-static', 'resources', 'wundr', 'policy.js'));
 
 	return { ctx: ctx, doc: doc, uci: uciMod, CBIMap: CBIMap, loadLuciModule: loadLuciModule };
 }
@@ -1116,8 +1123,53 @@ async function checkSegmentLifecycle() {
 	assert(!mode.render().querySelector('button'), 'network-mode.js: a VLAN-backed management interface is read-only');
 }
 
+async function checkFamilyEdits() {
+	var env = createLuciSandbox(), settings = env.uci, ui = await env.ctx.L.require('ui');
+	var families = env.loadLuciModule(path.join(APP, 'htdocs/luci-static/resources/view/wundr/families.js'));
+	var offline = '02:00:00:00:00:FF', saved = ['AA:BB:CC:DD:EE:01', offline];
+	settings.set('wundr', 'fam1', 'devices', saved);
+	var page = families.render(await families.load());
+	function click(node) { node.dispatchEvent({ type: 'click' }); }
+	function command(root, title) { return root.querySelectorAll('button').find(function(btn) { return btn.textContent.trim() === title; }); }
+	function settled() { return new Promise(function(resolve) { setImmediate(resolve); }); }
+	click(command(page, 'Edit'));
+	assert(ui.modal.textContent.includes('Not currently seen') && ui.modal.querySelector('input[value="' + offline + '"]').checked, 'Family: missing discovery does not uncheck existing membership');
+	ui.modal.querySelector('select').value = 'schedule';
+	click(ui.modal.querySelector('.cbi-button-positive')); await settled();
+	assert(JSON.stringify(settings.get('wundr', 'fam1', 'devices').slice().sort()) === JSON.stringify(saved.slice().sort()), 'Family: unchanged save preserves offline and discovered MACs');
+	click(command(page, 'Add member'));
+	ui.modal.querySelector('input').value = 'New member'; ui.modal.querySelector('select').value = 'schedule';
+	ui.modal.querySelector('input[type="time"]').value = '';
+	click(ui.modal.querySelector('.cbi-button-positive')); await settled();
+	assert(ui.modal.querySelector('.wb-form-error').textContent.includes('distinct'), 'Family: invalid schedule is reported inline');
+	click(command(ui.modal, 'Cancel'));
+	assert(settings.sections('wundr', 'family').length === 1 && !!settings.get('firewall', 'rule_pause'), 'Family: invalid submit and cancel do not stage a profile or alter another rule');
+}
+
 (async function runRuntimeSuite() {
 	var env = createLuciSandbox();
+	var policy = await env.ctx.L.require('wundr.policy');
+	var probe = createLuciSandbox(), probePolicy = await probe.ctx.L.require('wundr.policy');
+	probe.uci.set('firewall', 'zone_wan', 'name', 'uplink');
+	var client = '02:00:00:00:00:10';
+	var scope = probePolicy.scope([{ macaddr: client, interface: 'br-lan.10' }], {}, ['wan', 'wan6']);
+	assert(scope.source(client) === 'guest' && scope.uplinks.join() === 'uplink', 'policy: matches a guest bridge and renamed dual-stack uplink');
+	assert(!scope.source('unknown') && !probePolicy.scope([], {}, ['missing']).uplinks.length, 'policy: unknown membership or uplink is not guessed');
+	var sameMac = [{ macaddr: client, interface: 'br-lan' }, { macaddr: client, interface: 'lan10' }];
+	assert(!probePolicy.scope(sameMac, {}, ['wan']).source(client), 'policy: conflicting DHCP memberships are unknown');
+	assert(!policy.matches({ src: 'lan', dest: 'uplink', src_mac: client, target: 'REJECT' }, client, 'guest', ['uplink']), 'policy: LAN-only rule does not apply to guest client');
+	var reviewUi = await env.ctx.L.require('ui'), common = await env.ctx.L.require('wundr.ui');
+	var calls = [];
+	reviewUi.changes.init = function () { calls.push('refresh pending batch'); return Promise.resolve(); };
+	reviewUi.changes.displayChanges = function () { calls.push('review'); };
+	reviewUi.changes.apply = function () { throw new Error('automatic apply'); };
+	await common.reviewChanges();
+	assert(calls.join(',') === 'refresh pending batch,review', 'configuration actions open native pending-change review without applying');
+	calls.length = 0;
+	var save = env.uci.save;
+	env.uci.save = function () { return Promise.reject(new Error('save denied')); };
+	await common.reviewChanges().then(function () { fail('failed save unexpectedly succeeded'); }, function () { assert(!calls.length, 'failed save does not open review or apply'); });
+	env.uci.save = save;
 
 	/* 5a. Verify shell.js palette popover renders all 8 palettes (incl. Graphite/Uber) */
 	var popItems = env.doc.getElementById('wb-palette-popover').querySelectorAll('.wb-palette-item');
@@ -1167,6 +1219,14 @@ async function checkSegmentLifecycle() {
 			assert(text.indexOf('NaN') < 0, vname + ': rendered output free of "NaN"');
 
 			/* Behavioral checks on key OpenWrt 24+/25+ views */
+			if (vname === 'wifi-config.js') {
+				var radioSection = env.CBIMap._instances[0].sections[0], wifiSection = env.CBIMap._instances[0].sections[1];
+				var band = radioSection.children.find(function(option) { return option.option === 'band'; });
+				var encryption = wifiSection.children.find(function(option) { return option.option === 'encryption'; });
+				band._formValues.radio0 = '6g';
+				assert(encryption.validate('default_radio0', 'psk2') !== true && encryption.validate('default_radio0', 'sae') === true, 'wifi-config.js: advanced editor validates the selected band, not just stored UCI values');
+				assert(band.validate('radio0', '6g') !== true, 'wifi-config.js: changing a radio band also checks the attached SSIDs');
+			}
 			if (vname === 'qos.js') {
 				var queueOptions = env.CBIMap._instances[0].sections[0].children;
 				var rates = queueOptions.filter(function (option) { return option.option === 'upload' || option.option === 'download'; });
@@ -1194,6 +1254,7 @@ async function checkSegmentLifecycle() {
 				assert(JSON.stringify(env.uci.get('dhcp', 'lan', 'dhcp_option')) === '["3,192.168.1.1","6,1.1.1.1,9.9.9.9"]', 'lan-config.js: editing secondary DNS alone updates option 6 and preserves option 3');
 			}
 			if (vname === 'system.js') {
+				assert(domNode.querySelector('.wb-log .msg').textContent === 'sample log entry' && domNode.querySelector('.wb-log .lvl').textContent === 'error', 'system.js: stock logd message and facility/priority render without guessing from its text');
 				assert(typeof v.handleSaveApply === 'function', 'system.js: exposes handleSaveApply for Save & Apply footer');
 				var sysSec = env.CBIMap._instances[0].sections[0];
 				assert(JSON.stringify(sysSec.cfgsections()) === '["cfg01e48a"]', 'system.js: binds to anonymous @system[0] (cfg01e48a) on OpenWrt 24+/25+');
@@ -1236,12 +1297,12 @@ async function checkSegmentLifecycle() {
 				var permissive = state[2].map(function (zone) {
 					return zone.getName() === 'wan' ? Object.assign({}, zone, { getInput: function () { return 'ACCEPT'; } }) : zone;
 				});
-				var mixed = await v.render([null, null, permissive, {}]);
-				assert(mixed.querySelector('.wb-score').getAttribute('aria-label').includes('50%'), 'shield.js: ACCEPT on WAN and global SYN protection produce one pass out of two');
+				var mixed = await v.render([null, null, permissive, {}, state[4]]);
+				assert(mixed.querySelector('h2').textContent === 'WAN default: Accept' && !mixed.querySelector('.wb-score'), 'shield.js: displays actual WAN policy, not a misleading score');
 				env.uci.unset('firewall', defaultsId, 'synflood_protect');
 				env.uci.unset('firewall', defaultsId, 'syn_flood');
-				var unscored = await v.render([null, null, [], {}]);
-				assert(unscored.querySelector('.wb-score').getAttribute('aria-label').includes('Unavailable'), 'shield.js: missing WAN and SYN settings are not evidence of protection');
+				var unscored = await v.render([null, null, [], {}, { uplinks: [] }]);
+				assert(unscored.querySelector('h2').textContent.includes('unavailable') && !unscored.querySelector('#wb-add-forward'), 'shield.js: unknown uplink does not imply protection or permit a guessed forwarding');
 				if (!defaults) env.uci.remove('firewall', defaultsId);
 				else ['synflood_protect', 'syn_flood'].forEach(function (key) { if (defaults[key] != null) env.uci.set('firewall', defaultsId, key, defaults[key]); });
 			}
@@ -1256,6 +1317,8 @@ async function checkSegmentLifecycle() {
 
 	try { await checkSegmentLifecycle(); }
 	catch (error) { fail('Segment lifecycle: ' + error.message); }
+	try { await checkFamilyEdits(); }
+	catch (error) { fail('Family lifecycle: ' + error.message); }
 	if (failures.length) {
 		console.error('OPENWRT 24+/25+ COMPAT: FAIL (' + failures.length + ' of ' + checks + ' checks failed)');
 		failures.forEach(function (f) { console.error('  - ' + f); });

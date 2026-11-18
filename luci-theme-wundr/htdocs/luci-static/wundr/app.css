@@ -21,6 +21,16 @@
 .wb-kv dt { color: var(--wb-text-soft); font-weight: 500; }
 .wb-kv dd { margin: 0; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .wb-kv dd.mono { font-weight: 500; }
+.wb-device-open { width: 100%; padding: 3px 0; appearance: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wb-device-open .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.wb-device-open .mobile-id, .wb-device-open .mobile-status { display: none; }
+@media (max-width: 700px) {
+  .wb-table.wb-client-table { min-width: 0; width: 100%; table-layout: fixed; }
+  .wb-client-table thead, .wb-client-table td:not(:first-child), .wb-device-open .desktop-id { display: none; }
+  .wb-device-open { min-height: 48px; gap: 8px; white-space: normal; }
+  .wb-device-open .mobile-id, .wb-device-open .mobile-status { display: block; }
+  .wb-device-open .mobile-status { max-width: 72px; white-space: normal; text-align: right; }
+}
 
 /* Quick tiles (dashboard) */
 .wb-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -236,6 +246,14 @@ textarea.wb-input { min-height: 90px; resize: vertical; }
 .map-explanation dd { margin: 0; }
 .map-graph-card { overflow: hidden; }
 .map-graph-mount { min-width: 0; position: relative; }
+.wb-zone-index { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.wb-zone-link { min-height: 44px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--wb-border); border-radius: var(--wb-radius-xs); background: var(--wb-surface-2); color: var(--wb-text); font: 600 13px var(--wb-font); cursor: pointer; }
+.wb-zone-link small { color: var(--wb-text-soft); font-variant-numeric: tabular-nums; }
+.map-graph-node-zone[role=button] { cursor: pointer; }
+.map-graph-node-zone:focus-visible .map-graph-circle { stroke: var(--wb-text); stroke-width: 3px; }
+.wb-map-diagnostics { color: var(--wb-text-soft); font-size: 13px; margin: 14px 0; }
+.wb-map-diagnostics summary { cursor: pointer; }
+.modal .map-device { min-height: 44px; }
 .map-graph-svg { display: block; width: 100%; height: auto; min-height: 360px; aspect-ratio: 1000 / 620; border: 1px solid var(--wb-border); border-radius: var(--wb-radius-s); background: var(--wb-bg); user-select: none; -webkit-user-select: none; }
 .map-graph-bg { fill: var(--wb-bg); pointer-events: none; }
 .map-graph-edge { fill: none; stroke-width: 2.2; stroke-linecap: round; opacity: .88; vector-effect: non-scaling-stroke; pointer-events: none; transition: opacity .16s; }
@@ -261,7 +279,7 @@ textarea.wb-input { min-height: 90px; resize: vertical; }
   .wb-stat { min-width: calc(50% - 7px); }
   .wb-form-row { grid-template-columns: 1fr; gap: 5px; }
   .wb-input, select.wb-input { max-width: none; }
-  .wb-table-scroll .wb-table { min-width: 560px; }
+  .wb-table-scroll .wb-table:not(.wb-client-table) { min-width: 560px; }
   .wb-quick { grid-template-columns: 1fr 1fr; }
   .wb-log-line { grid-template-columns: 1fr; gap: 2px; }
   .map-explanation { grid-template-columns: 1fr; gap: 2px; }

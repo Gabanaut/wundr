@@ -188,6 +188,8 @@ jobs:
           body: |
             Automated Wundr build from `${{ github.sha }}`.
 
+            Guided settings now open LuCI's pending-change review. Device and Family rules use verified firewall zones; existing rules are not migrated on installation. This release also improves phone navigation, Wi-Fi security selection, and System log display.
+
             **Upgrading from v0.3.0?** Existing segments are not changed. Before using an older segment for guests, review its forwarding to `lan`, router input policy, and service exceptions in native LuCI. Back up your configuration first.
 
             Both packages are architecture-independent (`all`). Pick the pair matching your OpenWrt release:

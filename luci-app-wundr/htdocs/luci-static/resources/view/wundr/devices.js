@@ -1,39 +1,15 @@
 'use strict';
 'require view';
 'require uci';
-'require rpc';
 'require poll';
 'require dom';
-'require network';
-'require form';
+'require wundr.policy as policy';
 'require ui';
-'require tools.widgets as widgets';
 'require wundr.ui as wb';
 
-/* Wundr Devices — the live client list. Each device can be renamed, given a
- * static lease, or paused (a lan→wan REJECT firewall rule keyed on its MAC).
- * Data comes entirely from network.js + rpcd getDHCPLeases — nothing invented.
- * Writes stage via uci.js then apply through LuCI's validated path. */
-
-var callLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases', expect: { '': {} } });
-
 function collect() {
-	network.flushCache();
-	return Promise.all([
-		wb.hostHints(),
-		L.resolveDefault(callLeases(), {}),
-		network.getWifiNetworks()
-	]).then(function(res) {
-		var hints = res[0] || {}, leases = (res[1] && res[1].dhcp_leases) || [], nets = res[2] || [];
-		return Promise.all(nets.map(function(n) {
-			return L.resolveDefault(n.getAssocList(), []).then(function(list) {
-				return (list || []).map(function(a) { return Object.assign({ ssid: n.getActiveSSID() }, a); });
-			});
-		})).then(function(slists) {
-			var stations = {};
-			slists.forEach(function(list) { list.forEach(function(a) { if (a.mac) stations[a.mac.toUpperCase()] = a; }); });
-			return { hints: hints, leases: leases, stations: stations };
-		});
+	return Promise.all([ wb.hostHints(), policy.read() ]).then(function(res) {
+		return Object.assign({ hints: res[0] }, res[1]);
 	});
 }
 
@@ -71,11 +47,6 @@ function buildList(data) {
 }
 
 function blockRuleName(mac) { return 'wundr_block_' + mac.replace(/[^0-9a-fA-F]/g, ''); }
-function findBlock(mac) {
-	var name = blockRuleName(mac), hit = null;
-	uci.sections('firewall', 'rule', function(s) { if (!hit && s.name === name) hit = s['.name']; });
-	return hit;
-}
 
 return view.extend({
 	load: function() {
@@ -99,16 +70,33 @@ return view.extend({
 		}
 
 		function row(dev) {
-			var blocked = !!findBlock(dev.mac);
 			var lsid = leaseName(dev.mac);
 			var conn = dev.online ? ('Wi-Fi' + (dev.ssid ? ' · ' + dev.ssid : '')) : _('Not reported');
 			var displayName = (lsid && uci.get('dhcp', lsid, 'name')) || dev.name || _('Unknown device');
 			var pinnedIp = lsid ? uci.get('dhcp', lsid, 'ip') : null;
-			return E('tr', { 'data-hay': (String(displayName) + ' ' + (dev.ip || '') + ' ' + dev.mac).toLowerCase() }, [
+			var zone = live.source(dev.mac), ip = dev.ip || pinnedIp || '', status = dev.online ? _('Wi-Fi associated') : dev.lease ? _('Lease recorded') : _('Last seen');
+			function inspect() {
+				zone = live.source(dev.mac);
+				var name = blockRuleName(dev.mac), rules = uci.sections('firewall', 'rule').filter(function(rule) { return rule.name === name; });
+				var paths = policy.targets([dev.mac], live);
+				var scoped = paths && paths.every(function(path) { return rules.some(function(rule) { return policy.matches(rule, dev.mac, zone, [path.dest]); }); });
+				var pathLabel = paths ? zone + ' → ' + live.uplinks.join(', ') : _('Unverified');
+				var details = wb.kv([[ _('IPv4'), ip ], [ _('MAC'), dev.mac, 'mono' ], [ _('Connection'), conn ], [ _('Firewall zone'), zone || _('Unassigned') ], [ _('Uplink path'), pathLabel ], [ _('Device pause rule'), rules.length ? (scoped ? _('Configured for this path') : _('Configured; scope unverified')) : _('Not configured') ]]);
+				ui.showModal([displayName], [ details,
+					E('div', { 'class': 'wb-action-row' }, [ E('button', { 'class': 'wb-btn', 'click': function() { addLease(dev, displayName); } }, _('Static lease')),
+						paths || rules.length ? E('button', { 'class': 'wb-btn', 'click': ui.createHandlerFn(null, async function() {
+							var current = await policy.read(), next = policy.targets([dev.mac], current);
+							if (!details.isConnected || !details.closest('.modal-overlay-active')) return;
+							if (!rules.length && (!next || JSON.stringify(next) !== JSON.stringify(paths))) { live = Object.assign({}, live, current); inspect(); return; }
+							policy.replaceRules([name], name, rules.length ? [] : next);
+							return wb.reviewChanges().then(render);
+						}) }, rules.length ? _('Remove device pause') : _('Configure WAN pause')) : '', E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ]) ]);
+			}
+			return E('tr', { 'data-hay': [displayName, ip, dev.mac, zone].join(' ').toLowerCase() }, [
 				E('td', { 'class': 'name' }, [
-					E('div', { 'class': 'wb-device-name' }, [
+					E('button', { 'class': 'wb-device-name wb-device-open', 'type': 'button', 'click': inspect }, [
 						E('span', { 'class': 'ico' + (dev.online ? ' online' : '') }, [ wb.icon(dev.online ? 'wifi' : 'devices', 16) ]),
-						E('div', {}, [ E('b', {}, [ displayName ]), E('small', {}, [ dev.mac ]) ])
+						E('span', { 'class': 'grow' }, [ E('b', {}, [ displayName ]), E('small', { 'class': 'desktop-id' }, [ dev.mac ]), E('small', { 'class': 'mobile-id' }, [ [ip || dev.mac, zone || _('Unassigned')].join(' · ') ]) ]), E('small', { 'class': 'mobile-status' }, [ status ])
 					])
 				]),
 				E('td', { 'class': 'mono' }, [ dev.ip || pinnedIp || '—' ]),
@@ -116,11 +104,10 @@ return view.extend({
 				E('td', { 'class': 'mono' }, [ dev.online ? wb.pill(_('Online'), 'good') : wb.pill(dev.lease ? _('Lease recorded') : _('Last seen'), 'mut') ]),
 				E('td', { 'class': 'actions' }, [
 					E('button', { 'class': 'wb-btn sm' + (lsid ? ' active' : ''), 'title': lsid ? _('Edit or remove static lease') : _('Set up a static lease'), 'click': function() { addLease(dev, displayName); } }, [ lsid ? _('Static IP') : _('Lease') ]),
-					wb.toggle(!blocked, function(allow) { return setBlock(dev, allow); }, { 'aria-label': _('Allow internet'), 'title': allow_(blocked) })
+					wb.iconButton('devices', _('Device details'), { 'click': inspect })
 				])
 			]);
 		}
-		function allow_(blocked) { return blocked ? _('Currently paused — click to allow') : _('Click to pause internet'); }
 
 		function validIpv4(v) {
 			var p = String(v || '').trim().split('.');
@@ -147,7 +134,7 @@ return view.extend({
 					var otherMacs = L.toArray(uci.get('dhcp', existing, 'mac')).filter(function(mac) { return mac.toUpperCase() !== dev.mac; });
 					if (otherMacs.length) uci.set('dhcp', existing, 'mac', otherMacs);
 					else uci.remove('dhcp', existing);
-					return wb.apply(false)
+					return wb.reviewChanges()
 						.then(function() { return uci.load('dhcp'); }).then(render);
 				}
 				var ipVal = ip.value.trim();
@@ -158,35 +145,14 @@ return view.extend({
 				if (!existing) uci.set('dhcp', host, 'mac', [ dev.mac ]);
 				if (ipVal) uci.set('dhcp', host, 'ip', ipVal);
 				else uci.unset('dhcp', host, 'ip');
-				return wb.apply(false)
+				return wb.reviewChanges()
 					.then(function() { return uci.load('dhcp'); }).then(render);
 			}, { ok: existing ? _('Save lease') : _('Add lease') });
 		}
 
-		function setBlock(dev, allow) {
-			var existing = findBlock(dev.mac);
-			if (!allow) {
-				if (existing) return Promise.resolve();
-				var cid = uci.add('firewall', 'rule');
-				uci.set('firewall', cid, 'name', blockRuleName(dev.mac));
-				uci.set('firewall', cid, 'comment', 'Wundr · paused ' + dev.mac);
-				uci.set('firewall', cid, 'src', 'lan');
-				uci.set('firewall', cid, 'dest', 'wan');
-				uci.set('firewall', cid, 'proto', 'all');
-				uci.set('firewall', cid, 'target', 'REJECT');
-				uci.set('firewall', cid, 'src_mac', [ dev.mac.toUpperCase() ]);
-			} else if (existing) {
-				uci.remove('firewall', existing);
-			}
-			return wb.apply(false)
-				.then(function() { return collect(); })
-				.then(function(d) { live = d; render(); })
-				.catch(function() { render(); });
-		}
-
 		function render() {
 			var list = buildList(live);
-			var table = E('table', { 'class': 'wb-table' }, [
+			var table = E('table', { 'class': 'wb-table wb-client-table' }, [
 				E('thead', {}, [ E('tr', {}, [ E('th', {}, _('Device')), E('th', {}, _('IPv4')), E('th', {}, _('Connection')), E('th', {}, _('Status')), E('th', { 'style': 'text-align:right' }, _('Actions')) ]) ]),
 				E('tbody', {}, list.length ? list.map(row) : [ E('tr', {}, [ E('td', { 'class': 'wb-empty', 'colspan': '5' }, _('No devices have been seen yet.')) ]) ])
 			]);
@@ -206,7 +172,7 @@ return view.extend({
 		searchBox.addEventListener('input', applyFilter);
 
 		render();
-		poll.add(function() { return collect().then(function(d) { live = d; render(); }); }, 5);
+		poll.add(function() { return collect().then(function(d) { if (!body.contains(document.activeElement)) { live = d; render(); } }); }, 5);
 		return E('div', {}, [ E('section', { 'class': 'wb-card wb-hero' }, [ heading, summary, E('div', { 'class': 'wb-action-row' }, [ searchBox ]) ]), body ]);
 	},
 

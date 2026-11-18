@@ -2,7 +2,6 @@
 'require view';
 'require form';
 'require uci';
-'require rpc';
 
 /* Wundr Wi-Fi — native configuration editor over /etc/config/wireless.
  * Writes flow through LuCI's standard UCI apply (validated + rollback).
@@ -19,7 +18,9 @@ return view.extend({
 	},
 
 	render: function() {
-		var m, s, o;
+		var m, s, o, interfaces;
+		function sixGHzMode(value) { return /^(sae|sae-ext-key|owe|wpa3|wpa3-192)(?:\+|$)/.test(value || ''); }
+		var bandError = _('6 GHz requires WPA3 or Enhanced Open (OWE).');
 
 		m = new form.Map('wireless', _('Wi-Fi Radios & Networks'),
 			_('Per-radio settings and SSIDs. Changes apply through LuCI\'s ' +
@@ -27,6 +28,7 @@ return view.extend({
 
 		/* ---- Radio hardware (one section per wifi-device) ---- */
 		s = m.section(form.GridSection, 'wifi-device', _('Radios'));
+		var radios = s;
 		s.addremove = false;
 		s.nodescriptions = true;
 
@@ -39,6 +41,13 @@ return view.extend({
 		o.value('5g', _('5 GHz'));
 		o.value('6g', _('6 GHz'));
 		o.rmempty = true;
+		o.validate = function(sid, band) {
+			if (band !== '6g' || !interfaces) return true;
+			return uci.sections('wireless', 'wifi-iface').some(function(iface) {
+				var id = iface['.name'];
+				return interfaces.formvalue(id, 'device') === sid && !sixGHzMode(interfaces.formvalue(id, 'encryption'));
+			}) ? bandError : true;
+		};
 
 		o = s.option(form.ListValue, 'htmode', _('Channel width / mode'),
 			_('Values are generation-prefixed (HT=n, VHT=ac, HE=ax, EHT=be). ' +
@@ -67,7 +76,7 @@ return view.extend({
 
 		o = s.option(form.Value, 'channel', _('Channel'),
 			_('Auto (or auto with a list like "auto") lets the router pick. ' +
-			  'Fixed channels bypass ACS/DFS. Values depend on band and country.'));
+			  'Allowed channels depend on the radio and regulatory domain.'));
 		o.default = 'auto';
 		o.datatype = 'or("auto", uinteger)';
 		o.rmempty = true;
@@ -81,6 +90,7 @@ return view.extend({
 
 		/* ---- SSIDs (one section per wifi-iface) ---- */
 		s = m.section(form.GridSection, 'wifi-iface', _('Networks (SSIDs)'));
+		interfaces = s;
 		s.addremove = true;
 		s.nodescriptions = true;
 
@@ -101,22 +111,35 @@ return view.extend({
 		o = s.option(form.ListValue, 'encryption', _('Encryption'));
 		o.value('none', _('Open (no encryption)'));
 		o.value('psk2', _('WPA2-PSK'));
-		o.value('psk-mixed', _('WPA2/WPA3-PSK'));
+		o.value('psk-mixed', _('WPA / WPA2 Personal (legacy)'));
 		o.value('sae-mixed', _('WPA3-SAE (transition)'));
 		o.value('sae', _('WPA3-SAE only'));
-		o.default = 'psk-mixed';
+		if (L.hasSystemFeature('hostapd', 'owe')) o.value('owe', _('Enhanced Open (OWE)'));
+		var listed = new Set(['none','psk2','psk-mixed','sae-mixed','sae']);
+		if (L.hasSystemFeature('hostapd', 'owe')) listed.add('owe');
+		uci.sections('wireless', 'wifi-iface').forEach(function(iface) { if (iface.encryption && !listed.has(iface.encryption)) { o.value(iface.encryption, iface.encryption); listed.add(iface.encryption); } });
+		o.default = L.hasSystemFeature('hostapd', 'sae') ? 'sae' : 'psk2';
+		o.validate = function(sid, mode) {
+			var device = this.section.formvalue(sid, 'device');
+			if (radios.formvalue(device, 'band') === '6g' && !sixGHzMode(mode)) return bandError;
+			if (/^sae/.test(mode) && !L.hasSystemFeature('hostapd', 'sae') && mode !== uci.get('wireless', sid, 'encryption')) return _('SAE is not reported by this access point.');
+			return true;
+		};
 
 		o = s.option(form.Value, 'key', _('Network key'),
 			_('Minimum 8 characters for WPA2/WPA3.'));
 		o.password = true;
+		o.retain = true;
 		o.depends('encryption', 'psk2');
 		o.depends('encryption', 'psk-mixed');
 		o.depends('encryption', 'sae-mixed');
 		o.depends('encryption', 'sae');
 		o.validate = function(section_id, value) {
-			var enc = uci.get('wireless', section_id, 'encryption');
-			if (enc === 'none' || value == null || value === '') return true;
-			return value.length >= 8 ? true : _('Key must be at least 8 characters');
+			var enc = this.section.formvalue(section_id, 'encryption');
+			if (!['psk2','psk-mixed','sae-mixed','sae'].includes(enc)) return true;
+			if (!value && (uci.get('wireless', section_id, 'wpa_psk_file') || uci.get('wireless', section_id, 'sae_password_file'))) return true;
+			var bytes = new TextEncoder().encode(value || '').length;
+			return (bytes >= 8 && bytes <= 63) || (/^psk/.test(enc) && /^[a-f\d]{64}$/i.test(value)) || _('Enter a valid password for this security mode.');
 		};
 
 		o = s.option(form.ListValue, 'device', _('Radio'),
